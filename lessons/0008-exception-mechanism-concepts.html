@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 8 课 · Java 异常机制概念</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<main class="lesson">
+
+  <h1>Java 异常机制概念</h1>
+  <p class="subtitle">Spring Boot CRUD 复习 · 第 8 课（概念课，无新业务代码）· 预计 20 分钟</p>
+
+  <div class="mission">
+    🎯 本课服务于 <b>MISSION.md</b>：你已会写"统一返回 / 全局异常 / 校验 / 分页 / 动态 SQL"的 CRUD，但昨天你点出一个真问题——<b>"Java 异常不靠 AI 完全没思路"</b>。这是<b>不懂机制（B 类盲区）</b>，不是记不住 API。本课<b>不写新业务代码</b>，只把异常这套机制讲透：异常体系、throw/try-catch、异常如何"冒泡"、以及<b>为什么你 _01 里的 <code>@RestControllerAdvice</code> 能兜住全项目异常</b>。学完你要能<b>口述</b>这些，这正好是你出关闸门（双闸门 B）的必考项。
+  </div>
+
+  <h2>🧠 先回忆前几课（合上笔记答 3 题）</h2>
+  <p>间隔检索最能留住记忆。把第 5/6/7 课的核心从脑子里"捞"出来，再进新课。点选项立刻看对错。</p>
+  <div class="quiz" id="recall">
+    <div class="q" data-ans="0">
+      <div class="stem">1. 想让"一个类里的异常处理方法对【所有 Controller】生效、且返回 JSON 而非跳转错误页"，用哪个注解？</div>
+      <div class="opts">
+        <button class="opt">@RestControllerAdvice</button>
+        <button class="opt">@Controller</button>
+        <button class="opt">@ExceptionHandler</button>
+        <button class="opt">@ResponseBody</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="1">
+      <div class="stem">2. 客户端 JSON 里 name 为空、DTO 标了 @NotBlank，被全局处理后前端拿到的 code 是？</div>
+      <div class="opts">
+        <button class="opt">200</button>
+        <button class="opt">400</button>
+        <button class="opt">500</button>
+        <button class="opt">401</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="1">
+      <div class="stem">3. MyBatis 动态 SQL 里，哪个标签会自动去掉首个被拼入条件前面的 AND/OR？</div>
+      <div class="opts">
+        <button class="opt">&lt;if&gt;</button>
+        <button class="opt">&lt;where&gt;</button>
+        <button class="opt">&lt;foreach&gt;</button>
+        <button class="opt">&lt;set&gt;</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+  </div>
+
+  <h2>一、异常是什么：一种"走不通就往回传信号"的机制</h2>
+  <p>一个方法正常应该 <b>return 一个结果</b>（比如 <code>User</code>）。但运行时可能出意外：参数非法、查库失败、空指针……这时候它<b>没法返回正常的 User</b>，就改为<b>抛出一个异常对象</b>，沿着调用它的地方"往回传"，让上层决定怎么处理。</p>
+  <div class="callout">
+    <b>一句话：</b>返回值是"正常结果"，异常是"意外信号"。异常不是错误本身，而是<b>通知上层"这里出意外了"的载体</b>。
+  </div>
+
+  <h2>二、异常体系树（必须刻进脑子）</h2>
+  <div class="codeblock">Throwable  （所有"可抛"的根）
+├── Error          严重到 JVM 级的问题（如 OutOfMemoryError）
+│                  基本不该你 catch，程序通常也无能为力
+└── Exception      程序级、可以也应该处理的意外
+    ├── RuntimeException 及其子类  →  <b>unchecked 非受检</b>（编译不强制处理）
+    │     ├── NullPointerException
+    │     ├── IllegalArgumentException
+    │     └── IndexOutOfBoundsException
+    └── 其它 Exception（IOException、SQLException…） →  <b>checked 受检</b>（编译强制处理）</div>
+  <div class="clarify">
+    <h3>🔧 一个判断口诀</h3>
+    <p class="q-line">"它是不是 <code>RuntimeException</code> 的子类？"</p>
+    <ul>
+      <li><b>是</b> → <b>unchecked（非受检）</b>：编译器<b>不强制</b>你 try-catch 或 throws，你不处理也能编译通过（比如空指针）。</li>
+      <li><b>不是</b> → <b>checked（受检）</b>：编译器<b>强制</b>你必须处理（catch 掉，或在方法上 throws 声明），否则编译不过（比如读文件 IOException）。</li>
+    </ul>
+    <p>记忆点：名字里的"受检"=<b>编译器会 check（检查）你有没有处理它</b>。</p>
+  </div>
+
+  <h2>三、throw / throws / try-catch-finally 三件套</h2>
+  <div class="layer-grid">
+    <div class="layer-card">
+      <h3>throw（主动抛）</h3>
+      <p class="ann">写在方法体里</p>
+      <p><code>throw new IllegalArgumentException("年龄非法");</code><br>意思是"这里出意外了，我主动抛一个异常出去"。</p>
+    </div>
+    <div class="layer-card">
+      <h3>throws（声明会抛）</h3>
+      <p class="ann">写在方法签名上</p>
+      <p><code>void save() throws IOException</code><br>意思是"我自己不处理，把处理责任交给调用我的人"。</p>
+    </div>
+    <div class="layer-card">
+      <h3>try-catch-finally（自己接）</h3>
+      <p class="ann">就地处理</p>
+      <p><code>try{...}catch(Xxx e){...}finally{...}</code><br>catch 接住并处理；finally <b>无论成败都执行</b>（常用来关资源）。</p>
+    </div>
+  </div>
+
+  <h2>四、异常如何"冒泡"（核心机制，记牢）</h2>
+  <p>方法 A 调 B、B 调 C。若 <b>C 抛了异常又没在 C 里 catch</b>，异常就沿 <code>C → B → A → …</code> 一层层<b>往回传</b>（这叫<b>栈展开 stack unwinding</b>），直到：</p>
+  <ul>
+    <li>某层用 <code>catch</code> 接住了 → 在那里处理，冒泡停止；</li>
+    <li>一直没人接，传到最顶层（JVM）→ 打印堆栈、程序终止。</li>
+  </ul>
+  <div class="callout">
+    <b>关键推论：</b>你 _01 的 Controller 方法里<b>根本没写 try-catch</b>，但异常照样能被统一处理——正是因为异常会一路<b>冒泡</b>到更外层的框架，被框架接住。这就是下一节的主角。
+  </div>
+
+  <h2>五、为什么 @RestControllerAdvice 能兜住（最重要的一节）</h2>
+  <p>一次请求在 Spring 里的链路是这样的——注意异常在"你没 catch"时怎么被框架接走：</p>
+  <div class="flow">
+    <div class="node"><div class="layer">HTTP 请求</div><div class="tag">浏览器 / Postman</div></div>
+    <div class="arrow">→</div>
+    <div class="node"><div class="layer">DispatcherServlet</div><div class="tag">Spring 前端控制器</div></div>
+    <div class="arrow">→</div>
+    <div class="node"><div class="layer">你的 Controller 方法</div><div class="tag">抛异常·没 catch</div></div>
+    <div class="arrow">→</div>
+    <div class="node"><div class="layer">HandlerExceptionResolver</div><div class="tag">Spring 异常解析器</div></div>
+    <div class="arrow">→</div>
+    <div class="node"><div class="layer">@ExceptionHandler</div><div class="tag">你写的处理方法</div></div>
+    <div class="arrow">→</div>
+    <div class="node"><div class="layer">Result JSON</div><div class="tag">统一返回·写回前端</div></div>
+  </div>
+  <p>Controller 方法抛异常、你又没写 try-catch → 异常<b>冒泡到 DispatcherServlet</b> → Spring 内置的异常解析器把异常交给匹配的 <code>@ExceptionHandler</code> 方法 → 你 <code>return Result.error(...)</code>，Spring 把它当<b>正常响应</b>写回前端。</p>
+  <div class="callout good">
+    <b>这就是"看起来没 catch，却还是被统一处理"的真相：</b>框架在你方法的<b>更外层</b>接住了异常。这是一种 <b>AOP / 横切</b> 思想——不用每个方法都写 try-catch，<b>一处统一兜底</b>所有 Controller。
+  </div>
+  <div class="clarify">
+    <h3>🔧 最具体优先（决定走哪个 handler）</h3>
+    <p>当存在多个 <code>@ExceptionHandler</code> 时，Spring 选<b>最匹配异常类型</b>的那个。父类能接的，子类也能接；但子类更"具体"，所以优先子类。</p>
+    <p class="q-line">例：<code>MethodArgumentNotValidException</code> 既是自身类型、也是 <code>Exception</code> 的子类 → 校验失败时它会被<b>更具体的 handleValid 先接走</b>，不会落到兜底的 handleBiz。</p>
+  </div>
+
+  <h2>六、对照你 _01 里真实的处理器</h2>
+  <p>你 <code>common/GlobalExceptionHandler.java</code> 里三个方法，正好对应上面三节：</p>
+  <div class="codeblock"><span class="c">// ① 兜底：接住所有没被更具体处理器捕获的异常 → 500</span>
+<span class="k">@ExceptionHandler</span>(Exception.class)
+public Result&lt;Void&gt; handleBiz(Exception e) {
+    return Result.error(500, e.getMessage());
+}
+
+<span class="c">// ② 校验失败：比 Exception 更具体 → 优先匹配 → 400</span>
+<span class="k">@ExceptionHandler</span>(MethodArgumentNotValidException.class)
+public Result&lt;Void&gt; handleValid(MethodArgumentNotValidException e) {
+    String msg = e.getBindingResult().getFieldErrors().stream()
+            .map(f -&gt; f.getField() + ": " + f.getDefaultMessage())
+            .collect(Collectors.joining("; "));
+    return Result.error(400, msg);   <span class="c">// 多个字段错误拼成一个可读串</span>
+}
+
+<span class="c">// ③ 参数类型不匹配（如 age=4d0）：更具体 → 400</span>
+<span class="k">@ExceptionHandler</span>(MethodArgumentTypeMismatchException.class)
+public Result&lt;Void&gt; handleTypeMismatch(MethodArgumentTypeMismatchException e) {
+    Class&lt;?&gt; type = e.getRequiredType();
+    String typeName = (type != null) ? type.getSimpleName() : "?";
+    return Result.error(400, "参数" + e.getName() + "收到非法值" + e.getValue() + "，应为 " + typeName);
+}</div>
+  <p>记住分工：<b>② 校验失败（参数格式）用 400，③ 类型转换失败（如字符串转数字）也用 400，① 其余一律 500</b>。这正是"客户端错的给 4xx、服务端错的给 5xx"的 HTTP 语义。</p>
+
+  <h2>七、什么时候该自己 throw（实战心法）</h2>
+  <p>全局处理不是只接框架异常。你<b>自己写业务时</b>也该主动抛：</p>
+  <div class="codeblock"><span class="c">// 业务规则不满足时，主动抛，让全局处理器统一转成 Result.error</span>
+public User findById(Long id) {
+    User u = mapper.selectById(id);
+    if (u == null) {
+        throw new IllegalArgumentException("用户不存在: " + id);
+    }
+    return u;   <span class="c">// 不抛、只 return null 的话，上层会一脸懵</span>
+}</div>
+  <p>用异常表达"业务意外"，比 <code>return null</code> 清晰得多——上层要么拿到正常结果，要么拿到被统一包装过的错误 JSON。这习惯对你将来写 L1/L2 的 AI 后端同样重要。</p>
+
+  <h2>八、本课小测（新知识，合上笔记答）</h2>
+  <div class="quiz" id="newquiz">
+    <div class="q" data-ans="1">
+      <div class="stem">4. NullPointerException 属于哪一类？</div>
+      <div class="opts">
+        <button class="opt">checked 受检异常</button>
+        <button class="opt">unchecked 非受检异常</button>
+        <button class="opt">Error</button>
+        <button class="opt">既不是异常也不是 Error</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="1">
+      <div class="stem">5. 在方法体里写 <code>throw new IllegalArgumentException("年龄非法")</code> 表示？</div>
+      <div class="opts">
+        <button class="opt">声明这个方法可能会抛异常</button>
+        <button class="opt">主动抛出一个非受检异常</button>
+        <button class="opt">捕获并处理一个异常</button>
+        <button class="opt">编译错误，必须 try-catch</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="1">
+      <div class="stem">6. Controller 没写 try-catch，运行时却抛了异常，前端却收到统一的 Result.error JSON。原因是？</div>
+      <div class="opts">
+        <button class="opt">异常被 JVM 直接吞掉了</button>
+        <button class="opt">异常冒泡到 Spring 框架层，被 @ExceptionHandler 接住并返回 JSON</button>
+        <button class="opt">Java 自动重试了一次</button>
+        <button class="opt">@Valid 把异常拦截并重写了</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="1">
+      <div class="stem">7. handleBiz(Exception.class) 与 handleValid(MethodArgumentNotValidException.class) 同时存在，校验失败会走哪个？</div>
+      <div class="opts">
+        <button class="opt">handleBiz（返回 500）</button>
+        <button class="opt">handleValid（返回 400）</button>
+        <button class="opt">两个都走</button>
+        <button class="opt">随机选一个</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+  </div>
+
+  <h2>九、想深挖时，回看这些笔记</h2>
+  <div class="sources">
+    📚 你的 ima 一手资料（在《Java后端课程资料》知识库）：
+    <ul>
+      <li>Java 异常体系.md —— Throwable / Error / Exception、checked vs unchecked 完整示例</li>
+      <li>异常处理最佳实践.md —— 什么时候 throw、自定义异常怎么写</li>
+      <li>第 5 课统一返回与本课对应：<a href="0005-unified-result-exception.html">0005-unified-result-exception.html</a></li>
+    </ul>
+    🔗 外部权威：
+    <ul>
+      <li><a href="https://docs.oracle.com/javase/tutorial/essential/exceptions/">Oracle · The Java Tutorials: Exceptions</a></li>
+      <li><a href="https://www.baeldung.com/java-exceptions">Baeldung · Exception Handling in Java</a></li>
+      <li><a href="https://docs.spring.io/spring-framework/reference/web/webmvc/mvc-controller/ann-exceptionhandler.html">Spring · @ExceptionHandler / @ControllerAdvice</a></li>
+    </ul>
+  </div>
+
+  <div class="callout good">
+    <b>🤝 我是你的老师。</b>任何一处没懂（比如「checked 和 unchecked 到底差在哪」「为什么 RuntimeException 不用强制处理」「最具体优先到底怎么挑」），直接追问我。别带着疑惑结束这一课。
+  </div>
+
+  <footer>
+    🎓 第 8 课把"异常机制"这根你最虚的骨头补上了：异常体系 → throw/try-catch → 异常冒泡 → 框架层 @ExceptionHandler 兜底 → 最具体优先。这正好覆盖你出关<b>双闸门 B</b> 的口述考点（①为什么 @RestControllerAdvice 能兜 / checked-unchecked 区别）。<br>
+    下一步：<b>双闸门 A（关掉 AI 独立自重写完整 CRUD：校验+分页+全局异常+动态SQL）</b> → 我 review；然后 <b>双闸门 B（口述本课 4 个机制）</b>。两关过了，才进 ② Git/GitHub。
+  </footer>
+
+</main>
+
+<script>
+  const explain = [
+    '✓ 正确：@RestControllerAdvice = @ControllerAdvice + @ResponseBody，对【所有 Controller】生效且返回 JSON 而非错误页，正好契合 REST API。',
+    '✓ 正确：校验失败抛 MethodArgumentNotValidException，被 handleValid 接住转成 Result.error(400, ...)，前端拿到 code=400。',
+    '✓ 正确：<where> 自动剔除首个被拼入条件前面的 AND/OR，避免 "WHERE AND ..." 这种语法错误。',
+    '✓ 正确：NullPointerException 是 RuntimeException 的子类 → 属于 unchecked（非受检），编译器不强制你 try-catch 或 throws。判断口诀：是不是 RuntimeException 子类？是→非受检。',
+    '✓ 正确：throw 是在方法体里主动"抛"一个异常对象；IllegalArgumentException 是 RuntimeException 子类，所以是非受检，不强制声明或捕获。',
+    '✓ 正确：Controller 没 catch，异常沿调用栈冒泡到 Spring 的 DispatcherServlet / HandlerExceptionResolver，被 @ExceptionHandler 在其外层接住，return 的 Result 被当作正常响应写回 → 前端拿到统一 JSON。这就是框架层兜底。',
+    '✓ 正确：多个 @ExceptionHandler 时 Spring "最具体优先"；MethodArgumentNotValidException 比 Exception 具体，所以校验失败走 handleValid 返回 400，不会落到 handleBiz 的 500。'
+  ];
+  document.querySelectorAll('.q').forEach((q, qi) => {
+    const ans = +q.dataset.ans;
+    const opts = q.querySelectorAll('.opt');
+    const fb = q.querySelector('.feedback');
+    opts.forEach((btn, i) => {
+      btn.addEventListener('click', () => {
+        opts.forEach(o => o.disabled = true);
+        if (i === ans) {
+          btn.classList.add('correct');
+          fb.textContent = explain[qi];
+          fb.classList.add('ok');
+        } else {
+          btn.classList.add('wrong');
+          opts[ans].classList.add('correct');
+          fb.textContent = '✗ 再想想：' + explain[qi].replace('✓ 正确：', '');
+          fb.classList.add('no');
+        }
+      });
+    });
+  });
+</script>
+</body>
+</html>

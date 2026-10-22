@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 4 课 · 数据源、连接池与事务</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<main class="lesson">
+
+  <h1>数据源、连接池与事务</h1>
+  <p class="subtitle">Spring Boot CRUD 复习 · 第 4 课 / 共约 6 课 · 预计 22 分钟</p>
+
+  <div class="mission">
+    🎯 本课服务于 <b>MISSION.md</b>：第 3 课你已能写出完整 CRUD（注解 Mapper、<code>#{}</code> 防注入、<code>@Param</code> 多参、XML <code>&lt;foreach&gt;</code> 批量删）。但还有两个<b>黑盒</b>：<code>application.yaml</code> 里那几行 <code>url/user/password</code> 是怎么让你连上数据库的？以及——为什么有时候"改数据"会<b>一半成功一半失败</b>？本课揭开这两层：连接从哪来（DataSource / 连接池）、事务 <code>@Transactional</code> 到底管什么、为什么说"事务要开在 Service 层"。
+  </div>
+
+  <h2>🧠 先回忆第三课（合上笔记答 3 题）</h2>
+  <p>间隔检索最能留住记忆。先把第三课的核心从脑子里"捞"出来，再进新课。点选项立刻看对错。</p>
+  <div class="quiz" id="recall">
+    <div class="q" data-ans="1">
+      <div class="stem">1. 写 <code>WHERE name = ?</code> 时，下面哪个能防 SQL 注入？</div>
+      <div class="opts">
+        <button class="opt">WHERE name = '${name}'（字符串拼接）</button>
+        <button class="opt">WHERE name = #{name}（预编译占位符）</button>
+        <button class="opt">两者都能防注入</button>
+        <button class="opt">#{name} 只能用于数字</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="1">
+      <div class="stem">2. Mapper 接口有两个参数，想写成 <code>WHERE name=#{n} AND age=#{a}</code>，正确写法是？</div>
+      <div class="opts">
+        <button class="opt">直接 (String name, int age)，SQL 里写 #{name} #{age}</button>
+        <button class="opt">(@Param("n") String name, @Param("a") int age)，SQL 写 #{n} #{a}</button>
+        <button class="opt">多参数只能用 Map 传</button>
+        <button class="opt">用 {name} 大括号语法</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="1">
+      <div class="stem">3. 批量删除 <code>WHERE id IN (1, 2, 3)</code>，XML 里靠哪个标签把 List 展开成"括号+逗号"串？</div>
+      <div class="opts">
+        <button class="opt">&lt;if&gt; 条件判断</button>
+        <button class="opt">&lt;foreach&gt; 遍历集合</button>
+        <button class="opt">&lt;choose&gt; 分支</button>
+        <button class="opt">&lt;where&gt; 智能 WHERE</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+  </div>
+
+  <h2>一、连接从哪来：DataSource 与连接池</h2>
+  <p>你第 3 课写的 <code>@Select("SELECT * FROM user WHERE id=#{id}")</code>，MyBatis 帮你执行了 SQL，但<strong>它怎么拿到一条到 SQLite 的"数据库连接"的</strong>？答案是 <b>DataSource</b>。</p>
+
+  <div class="layer-grid">
+    <div class="layer-card">
+      <h3>DataSource</h3>
+      <p class="ann">数据库连接的"工厂/管理员"</p>
+      <p>Spring Boot 通过它获取连接。你不需要 <code>new</code> 连接，只要注入 DataSource（或直接用 MyBatis 的 Mapper，底层自动借连接）。</p>
+    </div>
+    <div class="layer-card">
+      <h3>HikariCP（默认连接池）</h3>
+      <p class="ann">预先养好一批连接，随用随借</p>
+      <p>启动时建好一批连接放着。请求来了"借"一个 → 用完"还"回去，<b>避免每次请求都现建连接</b>（TCP 握手 + 鉴权很慢）。</p>
+    </div>
+  </div>
+
+  <div class="codeblock"><span class="c"># application.yaml —— 这就是给连接池的"配方"</span>
+spring:
+  datasource:
+    url: jdbc:sqlite:identifier.sqlite
+    username: <span class="c"># SQLite 通常留空</span>
+    password: <span class="c"># SQLite 通常留空</span>
+
+<span class="c"># （可选）调连接池大小，默认已够用</span>
+spring:
+  datasource:
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2</div>
+
+  <div class="clarify">
+    <h3>🔧 一个类比就懂连接池</h3>
+    <ol>
+      <li class="q-line">没有池：每来一位顾客（请求），餐厅现招一名服务员（建连接）、培训、上岗，顾客走就开除。慢且浪费。</li>
+      <li class="q-line">有池（HikariCP）：提前雇好 10 名服务员待命。顾客来了直接借一名，用完归队。下一桌接着用，几乎零等待。</li>
+    </ol>
+    <p>所以你配的那行 <code>url</code>，是告诉连接池"去哪个数据库、用啥账号"。之后的事（建连、复用、回收）全由 HikariCP 托管，你只管写 Mapper。</p>
+  </div>
+
+  <h2>二、事务 @Transactional：别让数据"半成功"</h2>
+  <p>单条 SQL 自己就会提交（autocommit）。但真实业务常常是<b>多步操作</b>："给 A 减 100，给 B 加 100"。如果第一步成功、第二步崩了，就会出现<strong>钱扣了但没到账</strong>——数据不一致。</p>
+
+  <div class="callout">
+    <b>事务 = 把多个步骤打包成"要么全成、要么全败"的原子操作。</b><br>
+    生活例子：转账。A-100 与 B+100 <b>必须同时成功</b>；中途任何一步出错，就<b>回滚</b>到转账前的状态，仿佛什么都没发生。<br>
+    <code>@Transactional</code> 加在方法上 = "这个方法里的所有 DB 操作，要么一起提交，任一失败就一起回滚"。
+  </div>
+
+  <div class="codeblock"><span class="k">@Service</span>
+<span class="k">public class</span> <span class="t">UserService</span> {
+    <span class="k">private final</span> <span class="t">UserMapper</span> mapper;
+    <span class="k">public</span> <span class="t">UserService</span>(<span class="t">UserMapper</span> m) { <span class="k">this</span>.mapper = m; }
+
+    <span class="a">@Transactional</span>   <span class="c">// ← 这俩更新要么都成、要么都回滚</span>
+    <span class="k">public void</span> <span class="m">resetTwoUsers</span>(Long id1, Long id2) {
+        mapper.updateAge(id1, 0);
+        mapper.updateEmail(id2, <span class="m">"reset@x.com"</span>);
+        <span class="c">// 若这里抛异常，上面两步自动回滚，数据库保持原样</span>
+    }
+}</div>
+
+  <div class="clarify">
+    <h3>🔧 为什么事务要开在 Service 层，而不是 Mapper 层？</h3>
+    <ol>
+      <li class="q-line"><b>粒度问题</b>：一个 Mapper 方法通常就是"一条 SQL"，它本身已经是原子的，再加事务没意义。</li>
+      <li class="q-line"><b>组合在 Service</b>：是 <code>Service</code> 把"多个 Mapper 调用"组合成一个<b>业务动作</b>（如"转账""批量重置"）。事务边界必须圈住这个业务动作，才算"要么全成要么全败"。</li>
+      <li class="q-line"><b>对照你现在的代码</b>：<code>UserController → UserService → UserMapper</code>。你在 <code>UserService</code> 上标 <code>@Transactional</code>，就能罩住它内部调用的所有 Mapper——这正是"事务在 Service 层开"的含义。</li>
+    </ol>
+  </div>
+
+  <h3>🏦 真实案例：转账（你已在本项目 _01 亲手实现）</h3>
+  <p><code>user</code> 表加了 <code>money</code> 列后，"张三转 50 给里斯"就是最经典的事务场景：<b>扣张三 + 加里斯必须一起成败</b>。下面就是你现在项目里真正的代码。</p>
+
+  <p><b>① Mapper（SQL 写在 XML 里，增量更新，不用先查再算）</b></p>
+  <div class="codeblock"><span class="c">// resources/mapper/UserMapper.xml</span>
+&lt;update id="reduceMoney"&gt;
+    update user
+    set money = money - #{amount}      <span class="c">-- 张三 -amount</span>
+    where name = #{fromName} and money &gt;= #{amount}  <span class="c">-- 余额不足则 0 行</span>
+&lt;/update&gt;
+
+&lt;update id="addMoney"&gt;
+    update user
+    set money = money + #{amount}      <span class="c">-- 里斯 +amount</span>
+    where name = #{toName}
+&lt;/update&gt;</div>
+
+  <p><b>② 接收参数：用 DTO 装起来（前端只传"指令"，不传"结果"）</b></p>
+  <div class="codeblock"><span class="k">@Data</span>
+<span class="k">public class</span> <span class="t">TransferRequest</span> {
+    <span class="k">private</span> String  fromName;  <span class="c">// 谁转</span>
+    <span class="k">private</span> String  toName;   <span class="c">// 转给谁</span>
+    <span class="k">private</span> Integer amount;   <span class="c">// 转多少（不是"最终余额"！）</span>
+}</div>
+
+  <p><b>③ Service：两步 UPDATE 被 @Transactional 罩住</b></p>
+  <div class="codeblock"><span class="a">@Transactional</span>
+<span class="k">public void</span> <span class="m">transfer</span>(String fromName, String toName, Integer amount) {
+    <span class="k">if</span> (amount == null || amount &lt;= 0)
+        <span class="k">throw new</span> <span class="t">IllegalArgumentException</span>(<span class="m">"金额必须 &gt; 0"</span>);
+
+    <span class="k">int</span> r1 = mapper.reduceMoney(fromName, amount);  <span class="c">// 第 1 步：张三 -amount</span>
+    <span class="k">if</span> (r1 == 0) <span class="k">throw new</span> <span class="t">RuntimeException</span>(<span class="m">"转出用户不存在或余额不足："</span> + fromName);
+
+    <span class="k">int</span> r2 = mapper.addMoney(toName, amount);     <span class="c">// 第 2 步：里斯 +amount</span>
+    <span class="k">if</span> (r2 == 0) <span class="k">throw new</span> <span class="t">RuntimeException</span>(<span class="m">"转入用户不存在："</span> + toName);
+}</div>
+
+  <p><b>④ Controller：转账是"动作"，用 POST</b></p>
+  <div class="codeblock"><span class="a">@PostMapping</span>(<span class="m">"/transfer"</span>)
+<span class="k">public</span> String <span class="m">transfer</span>(<span class="a">@RequestBody</span> TransferRequest req) {
+    userService.transfer(req.getFromName(), req.getToName(), req.getAmount());
+    <span class="k">return</span> <span class="m">"转账成功"</span>;
+}</div>
+
+  <div class="callout good">
+    <b>🔍 亲眼看到回滚：</b>发 <code>POST /users/transfer</code>，请求体
+    <code>{"fromName":"张三","toName":"王五","amount":50}</code>：
+    第 1 步张三扣成功（200→150），第 2 步"王五"不存在 → 0 行 → 抛异常 →
+    <b>@Transactional 回滚</b> → 查库张三还是 200。这就是"要么都成、要么都败"的实体证明。
+  </div>
+
+  <h2>三、实战回顾与进阶练习（可选）</h2>
+  <p>上面「🏦 真实案例」的转账，就是你在 _01 亲手实现的——你已经跑通了事务的<b>完整闭环</b>：增量 SQL + 余额校验 + DTO 收"指令" + <code>@Transactional</code> 罩两步 + 用"转入人不存在"触发回滚。</p>
+  <p>想再巩固一次，可把转账泛化成<b>批量重置</b>（更接近后台真实操作）：</p>
+  <ol>
+    <li>给 <code>UserService</code> 加 <code>@Transactional resetUsers(List&lt;Long&gt; ids)</code>，循环把每个用户 <code>age=0、email="reset@x.com"</code> 后调 <code>update(user)</code>。</li>
+    <li>Controller 加 <code>POST /users/reset</code>，用 <code>@RequestBody List&lt;Long&gt; ids</code> 收 id 数组（和批量删除同一套路）。</li>
+    <li><b>验证回滚</b>：在循环第 2 轮前 <code>throw new RuntimeException("boom")</code>，发 <code>[1,2,3]</code> 后查库——三个用户都应"没变"。删掉异常即恢复。</li>
+  </ol>
+  <div class="callout">
+    <b>📌 先别慌：</b>你现在的每个单条 Mapper 操作默认 autocommit，本来就是各自提交、各自成功，所以"写基础 CRUD"这一步<b>暂时不需要</b>碰事务。本课是让你<strong>建立认知</strong>——等以后一个接口要"多步改数据"时，知道该在哪加 <code>@Transactional</code>。
+  </div>
+
+  <h2>四、本课小测（新知识，合上笔记答）</h2>
+  <div class="quiz" id="newquiz">
+    <div class="q" data-ans="1">
+      <div class="stem">4. HikariCP 连接池主要解决了什么问题？</div>
+      <div class="opts">
+        <button class="opt">让 SQL 写起来更短</button>
+        <button class="opt">复用数据库连接，避免每次请求都现建连接</button>
+        <button class="opt">自动防 SQL 注入</button>
+        <button class="opt">代替 MyBatis 执行 SQL</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="1">
+      <div class="stem">5. <code>@Transactional</code> 应该加在哪一层？</div>
+      <div class="opts">
+        <button class="opt">加在 Mapper 接口方法上</button>
+        <button class="opt">加在 Service 层（组合多个 Mapper 调用的业务方法）</button>
+        <button class="opt">加在 Controller 上</button>
+        <button class="opt">不用加，Spring 自动管</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="2">
+      <div class="stem">6. 一个方法里先 update A、再 update B，中间抛异常，<b>不加事务</b>会怎样？</div>
+      <div class="opts">
+        <button class="opt">A、B 都自动回滚</button>
+        <button class="opt">什么都不发生</button>
+        <button class="opt">A 改了、B 没改，数据不一致</button>
+        <button class="opt">Spring 会报错阻止执行</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="0">
+      <div class="stem">7. 转账时，为什么前端<b>不该</b>直接传"两人最终余额"，而是传 fromName / toName / amount 三个值？</div>
+      <div class="opts">
+        <button class="opt">余额只能由服务端当场算（money = money - amount）；客户端传金额等于"自己给自己加钱"，不安全也无法保证一致性</button>
+        <button class="opt">因为前端算余额更快</button>
+        <button class="opt">因为 REST 规范禁止传余额字段</button>
+        <button class="opt">因为数据库不让存余额</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+  </div>
+
+  <h2>五、想深挖时，回看这些笔记</h2>
+  <div class="sources">
+    📚 你的 ima 一手资料（在《Java后端课程资料》知识库）：
+    <ul>
+      <li>数据库MySQL与JDBC.md —— 连接池原理、事务 ACID 与回滚</li>
+      <li>Spring 事务管理.md —— <code>@Transactional</code> 的传播与边界</li>
+    </ul>
+    🔗 外部权威：
+    <ul>
+      <li><a href="https://docs.spring.io/spring-framework/reference/data-access/transaction.html">Spring 官方 · Transaction Management</a></li>
+      <li><a href="https://github.com/brettwooldridge/HikariCP">HikariCP</a>（默认连接池，配置项见 wiki）</li>
+    </ul>
+  </div>
+
+  <div class="callout good">
+    <b>🤝 我是你的老师。</b>任何一处没懂（比如「连接池具体怎么借还」「回滚到底怎么触发」），直接追问我。别带着疑惑进下一课。
+  </div>
+
+  <footer>
+    下一课预告：<b>第 5 课 · 统一返回与全局异常处理</b> —— 把零散的 CRUD 接口升级成"规范 API"：封装 <code>Result</code> 返回体、用 <code>@RestControllerAdvice</code> 兜底异常，让前端拿到的永远是统一结构。
+  </footer>
+
+</main>
+
+<script>
+  const explain = [
+    '✓ 正确：#{name} 生成 PreparedStatement 预编译参数（? 占位），值安全传入，防注入；${name} 是字符串拼接，有注入风险，仅用于表名/列名且需白名单。',
+    '✓ 正确：Mapper 多参数时 MyBatis 无法按名字匹配，必须用 @Param 起名，SQL 里用对应名字 #{n} #{a}。否则抛 "Parameter \'name\' not found"。',
+    '✓ 正确：<foreach> 遍历 List，open="(" close=")" 加括号、separator="," 加逗号，把 List 展开成 (1, 2, 3)，配合 IN 使用。',
+    '✓ 正确：连接池预先建好一批连接复用，避免每个请求都经历 TCP 握手+鉴权去新建连接，大幅提升并发性能。',
+    '✓ 正确：事务要圈住"业务动作"——是 Service 把多个 Mapper 调用组合成一步业务，所以在 Service 层加 @Transactional 才有意义；Mapper 单条 SQL 本身已原子。',
+    '✓ 正确：不加事务时每条 SQL 各自提交（autocommit）。第一步成功已落库，第二步异常不会回滚，导致 A 改了 B 没改，数据不一致。',
+    '✓ 正确：余额必须由服务端当场读当前值再算（money = money - amount）。前端若直接传"最终余额"，既能随意篡改金额凭空造钱，又可能基于过期余额算出错，还丢失了"转了多少"这个业务动作本身。所以传"指令"（fromName/toName/amount）才对。'
+  ];
+  document.querySelectorAll('.q').forEach((q, qi) => {
+    const ans = +q.dataset.ans;
+    const opts = q.querySelectorAll('.opt');
+    const fb = q.querySelector('.feedback');
+    opts.forEach((btn, i) => {
+      btn.addEventListener('click', () => {
+        opts.forEach(o => o.disabled = true);
+        if (i === ans) {
+          btn.classList.add('correct');
+          fb.textContent = explain[qi];
+          fb.classList.add('ok');
+        } else {
+          btn.classList.add('wrong');
+          opts[ans].classList.add('correct');
+          fb.textContent = '✗ 再想想：' + explain[qi].replace('✓ 正确：', '');
+          fb.classList.add('no');
+        }
+      });
+    });
+  });
+</script>
+</body>
+</html>

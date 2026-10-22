@@ -1,0 +1,27 @@
+spring:
+  application:
+    name: _01
+  datasource:
+    # SQLite 嵌入式数据库，文件落盘到项目根目录的 _01.db
+    url: jdbc:sqlite:identifier.sqlite
+    driver-class-name: org.sqlite.JDBC
+    hikari:
+      maximum-pool-size: 10 # 最大连接池
+      minimum-idle: 2 # 最小连接池
+
+  # 启动时自动执行 src/main/resources/schema.sql 建表
+#  sql:
+#    init:
+#      mode: always
+
+server:
+  port: 8081
+
+mybatis:
+#   作用：告诉 MyBatis "去哪找 XML 版的 SQL 文件"。
+    # classpath: = 从编译后的 resources 目录找（也就是你 src/main/resources/ 下的文件）。
+    # mapper/*.xml = src/main/resources/mapper/ 下所有 .xml 文件。
+  mapper-locations: classpath:mapper/*.xml
+
+  configuration:
+    map-underscore-to-camel-case: true  # 下划线列名自动转驼峰

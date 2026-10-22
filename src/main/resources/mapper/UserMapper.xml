@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  namespace 必须 = Mapper 接口的「全限定名」（包名 + 类名）。
+  它的作用就是把这个 XML 和 UserMapper.java 接口「绑定」起来：
+  接口里的方法名，会去这个 XML 里找同名的 <delete>/<select> 等节点。
+-->
+<mapper namespace="learn.springboot.mapper.UserMapper">
+
+    <select id="findByCondition" resultType="learn.springboot.entity.User">
+        select * from user
+        <where>
+            <if test="name != null and name != ''">
+                and name like '%' || #{name} || '%'
+            </if>
+            <if test="age != null">
+                and age = #{age}
+            </if>
+        </where>
+    </select>
+
+    <!--
+      id="deleteByIds" 必须和接口里的方法名一字不差地对应。
+      SQL 写在标签体里（这是和注解写法的唯一区别：注解把 SQL 写在 Java 里，
+      XML 把 SQL 写在 xml 里）。
+
+      <foreach> 用来把一个集合展开成 SQL 片段：
+        collection="ids"  → 接口方法 @Param("ids") 指定的参数名
+        item="id"          → 遍历时每个元素的临时别名
+        open="(" close=")" → 在整体两侧加上括号
+        separator=","      → 元素之间用逗号分隔
+      最终生成的 SQL 形如：DELETE FROM user WHERE id IN (1,2,3)
+    -->
+    <delete id="deleteByIds">
+        delete from user
+        where id in
+            <foreach collection="ids" item="id" open="(" close=")" separator=",">
+                #{id}
+            </foreach>
+    </delete>
+
+    <update id="update">
+        update user
+            <set>
+                <if test="name != null">name = #{name}</if>
+                <if test="age != null">age = #{age}</if>
+                <if test="email != null">email = #{email}</if>
+                <if test="money != null">money = #{money}</if>
+            </set>
+        where id = #{id}
+    </update>
+
+    <update id="reduceMoney">
+        update user
+        set money = money-#{amount}
+        where name = #{fromName} and money >= #{amount}
+    </update>
+
+    <update id="addMoney">
+        update user
+        set money = money+#{amount}
+        where name = #{toName}
+    </update>
+
+</mapper>

@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 2 课 · 项目骨架与 IoC/DI：把那条线跑成真代码</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<main class="lesson">
+
+  <h1>项目骨架与 IoC/DI：把那条线跑成真代码</h1>
+  <p class="subtitle">Spring Boot CRUD 复习 · 第 2 课 / 共约 6 课 · 预计 25 分钟</p>
+
+  <div class="mission">
+    🎯 本课服务于 <b>MISSION.md</b>：在 <code>_01</code> 里真正建出 <b>Controller → Service → Mapper</b> 的骨架，并让一次请求能从浏览器一路走到数据库。上节课你画出了那条线，这节课把它变成能运行的代码。
+  </div>
+
+  <h2>一、我们要造什么</h2>
+  <p>一个最小但完整的 CRUD 骨架，对应第 1 课那条线。四个 Java 文件 + 一张数据库表：</p>
+
+  <div class="flow">
+    <div class="node"><div class="layer">UserController</div><div class="tag">控制层</div><div class="job">接请求/回 JSON</div></div>
+    <div class="arrow">→</div>
+    <div class="node"><div class="layer">UserService</div><div class="tag">业务层</div><div class="job">业务逻辑</div></div>
+    <div class="arrow">→</div>
+    <div class="node"><div class="layer">UserMapper</div><div class="tag">数据层</div><div class="job">接口+SQL</div></div>
+    <div class="arrow">→</div>
+    <div class="node"><div class="layer">user 表</div><div class="tag">SQLite</div><div class="job">实际存数据</div></div>
+  </div>
+
+  <div class="layer-grid">
+    <div class="layer-card">
+      <h3>entity/User.java</h3>
+      <p class="ann">注解：<code>@Data</code></p>
+      <p>用户实体，对应 user 表一行。Lombok 自动生成 getter/setter。</p>
+    </div>
+    <div class="layer-card">
+      <h3>mapper/UserMapper.java</h3>
+      <p class="ann">注解：<code>@MapperScan</code> 扫描</p>
+      <p>数据接口，一个方法一条 SQL（注解写）。MyBatis 生成实现。</p>
+    </div>
+    <div class="layer-card">
+      <h3>service/UserService.java</h3>
+      <p class="ann">注解：<code>@Service</code></p>
+      <p>业务类，用构造器注入 Mapper，转发 CRUD 调用。</p>
+    </div>
+    <div class="layer-card">
+      <h3>controller/UserController.java</h3>
+      <p class="ann">注解：<code>@RestController</code></p>
+      <p>门面，用构造器注入 Service，把 HTTP 映射成方法调用。</p>
+    </div>
+  </div>
+
+  <h2>二、IoC/DI 是怎么落地的</h2>
+  <p>第 1 课说「IoC 把四个角色粘在一起」。落地时靠两件具体的事：</p>
+  <ol>
+    <li><b>Mapper 接口怎么变成 Bean？</b> 看 <code>Application.java</code> 上的 <code>@MapperScan("learn.springboot.mapper")</code>。Spring 启动时扫描这个包下的接口，MyBatis 为每个接口生成<b>动态代理</b>，并注册成 Spring 容器里的 Bean。所以 <code>UserMapper</code> 能被注入——虽然你从没写它的实现类。</li>
+    <li><b>层与层怎么连起来？</b> 用<b>构造器注入</b>：<code>UserService</code> 的构造参数写着 <code>UserMapper</code>，Spring 自动把上面那个代理塞进来；<code>UserController</code> 的构造参数写着 <code>UserService</code>，Spring 再把 Service 塞进来。装配方向 = 调用方向，逐层向下，和第 1 课澄清卡片完全一致。</li>
+  </ol>
+
+  <div class="clarify">
+    <h3>🔧 为什么用构造器注入，而不是字段 @Autowired？</h3>
+    <p>字段注入（在字段上写 <code>@Autowired private UserService userService;</code>）能跑，但有两个缺点：依赖可被人改（非 final）、单元测试时很难塞一个假的 Mapper 进去。构造器注入把依赖写在参数里、声明成 <code>final</code>，既不可变又好测。这是现在 Spring 官方推荐写法。</p>
+  </div>
+
+  <h2>三、四块代码逐个看</h2>
+
+  <h3>① 实体 User.java</h3>
+  <div class="codeblock">package learn.springboot.entity;
+import lombok.Data;
+
+@Data                       <span class="c">// 自动生成 getter/setter/toString</span>
+public class User {
+    private Long id;
+    private String name;
+    private String email;
+}</div>
+
+  <h3>② 数据层 UserMapper.java（只有接口 + 注解）</h3>
+  <div class="codeblock">public interface UserMapper {
+    @Insert("INSERT INTO user(name, email) VALUES(#{name}, #{email})")
+    @Options(useGeneratedKeys = true, keyProperty = "id")
+    void insert(User user);            <span class="c">// 自增主键回填到 user.id</span>
+
+    @Select("SELECT * FROM user WHERE id = #{id}")
+    User findById(Long id);
+
+    @Select("SELECT * FROM user")
+    List&lt;User&gt; findAll();
+
+    @Update("UPDATE user SET name=#{name}, email=#{email} WHERE id=#{id}")
+    void update(User user);
+
+    @Delete("DELETE FROM user WHERE id=#{id}")
+    void deleteById(Long id);
+}</div>
+
+  <h3>③ 业务层 UserService.java（构造器注入 Mapper）</h3>
+  <div class="codeblock">@Service
+public class UserService {
+    private final UserMapper userMapper;
+
+    public UserService(UserMapper userMapper) {   <span class="c">// 构造器注入</span>
+        this.userMapper = userMapper;
+    }
+
+    public User create(User user) {
+        userMapper.insert(user);
+        return user;             <span class="c">// 此时 user.id 已有值</span>
+    }
+    <span class="c">// findById / findAll / update / delete 同理……</span>
+}</div>
+
+  <h3>④ 控制层 UserController.java（构造器注入 Service）</h3>
+  <div class="codeblock">@RestController
+@RequestMapping("/users")
+public class UserController {
+    private final UserService userService;
+
+    public UserController(UserService userService) {
+        this.userService = userService;
+    }
+
+    @PostMapping                      <span class="c">// POST /users</span>
+    public User create(@RequestBody User user) {   <span class="c">// JSON→对象</span>
+        return userService.create(user);
+    }
+    <span class="c">// GET /users/{id}  GET /users  PUT /users/{id}  DELETE /users/{id}</span>
+}</div>
+
+  <h2>四、让它能跑起来</h2>
+  <p>我在 <code>_01</code> 里已经把上面四个文件和建表脚本都建好了。还改了两处配置：</p>
+  <ul>
+    <li><code>pom.xml</code>：加了 <code>spring-boot-starter-web</code>（提供 <code>@RestController</code> 和内嵌 Tomcat，REST 必需）。</li>
+    <li><code>application.yaml</code>：加了 <code>spring.sql.init.mode=always</code>，启动时自动执行 <code>src/main/resources/schema.sql</code> 建好 user 表。</li>
+  </ul>
+  <div class="codeblock"><span class="c"># 在项目根目录 _01 下启动（需要 Maven 联网拉一次依赖）</span>
+mvn spring-boot:run
+<span class="c"># 启动后试一条新增：</span>
+curl -X POST localhost:8080/users -H "Content-Type: application/json" \
+     -d "{\"name\":\"张三\",\"email\":\"z@s.com\"}"
+<span class="c"># 返回 {"id":1,"name":"张三","email":"z@s.com"} 即成功</span></div>
+
+  <div class="callout">
+    <b>⚠️ 常见坑：Postman 报 415 Unsupported Media Type</b><br>
+    因为 <code>@RequestBody</code> 要求请求体是 <b>JSON</b>（<code>Content-Type: application/json</code>）。
+    若 Postman 的 Body 选了 <b>form-data</b>（multipart/form-data），Spring 反序列化不了，就回 415。<br>
+    ✅ 正确做法：Body → <b>raw</b> → <b>JSON</b>，填 <code>{"name":"张三","email":"z@s.com"}</code>
+    （<b>不要填 id</b>，自增主键由数据库生成后回填）。<br>
+    📌 记牢区别：<code>@RequestBody</code> 收 JSON 体；表单数据要用 <code>@RequestParam</code> / <code>@ModelAttribute</code>；
+    400 是"内容本身有问题"，405 是"HTTP 方法不对"。
+  </div>
+
+  <div class="callout good">
+    <b>💡 改了代码却不生效？多半是没重启</b><br>
+    Spring Boot 默认<b>不热加载</b>源码：你改了 <code>.java</code>，但还在跑的那个进程加载的是<b>旧的编译类</b>。
+    典型表现就是「字段加了但 JSON 里没有」「逻辑改了但行为没变」。<br>
+    ✅ 每次改完 Java 代码，<b>Ctrl+C 停掉 <code>mvn spring-boot:run</code> 再重新跑</b>。
+    想免去手动重启，可加 <code>spring-boot-devtools</code> 依赖实现自动重启（开发期常用）。
+  </div>
+
+  <h2>五、动手任务（约 15 分钟）</h2>
+  <ol>
+    <li>打开 <code>_01</code> 里的四个 Java 文件，对照上面代码，确认每一层注入的是谁（这是第 1 课澄清卡片的"实物版"）。</li>
+    <li>试着启动项目（<code>mvn spring-boot:run</code>），用 curl 或浏览器 POST 一条数据，再用 GET 把它查出来。</li>
+    <li>改一个小地方练手：给 User 加一个 <code>age</code> 字段，让它能存能查（提示：改 entity、mapper 的 SQL、schema.sql 三处）。</li>
+  </ol>
+
+  <h2>六、小测：立刻检索一遍（合上笔记答）</h2>
+  <div class="quiz">
+    <h2>检索练习</h2>
+    <p style="color:var(--muted);font-size:14px;margin-top:0">每题点一个选项，立刻看对错。答错看解析再回想。</p>
+
+    <div class="q" data-ans="1">
+      <div class="stem">1. <code>@MapperScan("learn.springboot.mapper")</code> 是做什么的？</div>
+      <div class="opts">
+        <button class="opt">扫描实体类</button>
+        <button class="opt">扫描 Mapper 接口并注册成 Bean</button>
+        <button class="opt">启动 Web 服务器</button>
+        <button class="opt">配置数据库账号</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-ans="0">
+      <div class="stem">2. <code>UserService(UserMapper m)</code> 这种写法属于？</div>
+      <div class="opts">
+        <button class="opt">构造器注入（DI）</button>
+        <button class="opt">字段注入</button>
+        <button class="opt">动态代理</button>
+        <button class="opt">控制反转</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-ans="3">
+      <div class="stem">3. 严格分层下，Controller 应该注入谁？</div>
+      <div class="opts">
+        <button class="opt">Mapper</button>
+        <button class="opt">DataSource</button>
+        <button class="opt">实体类</button>
+        <button class="opt">Service</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-ans="2">
+      <div class="stem">4. <code>@RequestBody</code> 在 Controller 方法参数上的作用是？</div>
+      <div class="opts">
+        <button class="opt">把响应转成 JSON</button>
+        <button class="opt">从 URL 取参数</button>
+        <button class="opt">把请求体 JSON 转成 Java 对象</button>
+        <button class="opt">开启事务</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+  </div>
+
+  <h2>七、想深挖时，回看这些笔记</h2>
+  <div class="sources">
+    📚 你的 ima 一手资料（在《Java后端课程资料》知识库）：
+    <ul>
+      <li><a href="ima://kb/7516478123286370">Spring之IoC与AOP.md</a> —— @MapperScan / DI 的底层来源</li>
+      <li><a href="ima://kb/7516478123286370">SpringMVC.md</a> —— @RestController / @RequestBody / 路由映射</li>
+      <li><a href="ima://kb/7516478123286370">MyBatis.md</a> —— 注解式 Mapper 与动态代理</li>
+      <li><a href="ima://kb/7516478123286370">SpringBoot自动装配.md</a> —— starter / 自动配置怎么生效</li>
+    </ul>
+    🔗 外部权威：<a href="https://docs.spring.io/spring-boot/docs/current/reference/html/">Spring Boot 官方文档</a> · <a href="https://mybatis.org/mybatis-3/">MyBatis 官方文档</a>
+  </div>
+
+  <div class="callout good">
+    <b>🤝 我是你的老师。</b>跑不起来、或哪块代码看不懂（比如「动态代理到底生成了啥」「构造器注入怎么被 Spring 识别的」），直接追问我。别带着疑惑进下一课。
+  </div>
+
+  <footer>
+    下一课预告：<b>第 3 课 · MyBatis CRUD 细节</b> —— 注解 SQL 与 XML 两种写法、参数传递（#{} vs ${}）、结果映射，以及怎么用测试验证 CRUD 真的对。
+  </footer>
+
+</main>
+
+<script>
+  const explain = [
+    '✓ 正确：@MapperScan 让 Spring 扫描指定包下的 Mapper 接口，MyBatis 生成代理并注册成 Bean，于是能被注入。',
+    '✓ 正确：把依赖写在构造参数里由 Spring 传入，这就是构造器注入，是 DI 的一种写法。',
+    '✓ 正确：Controller 注入 Service（不是 Mapper），分层才清晰，事务/校验有处安放。',
+    '✓ 正确：@RequestBody 把请求体里的 JSON 反序列化成方法参数对应的 Java 对象。'
+  ];
+  document.querySelectorAll('.q').forEach((q, qi) => {
+    const ans = +q.dataset.ans;
+    const opts = q.querySelectorAll('.opt');
+    const fb = q.querySelector('.feedback');
+    opts.forEach((btn, i) => {
+      btn.addEventListener('click', () => {
+        opts.forEach(o => o.disabled = true);
+        if (i === ans) {
+          btn.classList.add('correct');
+          fb.textContent = explain[qi];
+          fb.classList.add('ok');
+        } else {
+          btn.classList.add('wrong');
+          opts[ans].classList.add('correct');
+          fb.textContent = '✗ 再想想：' + explain[qi].replace('✓ 正确：', '');
+          fb.classList.add('no');
+        }
+      });
+    });
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 9 课 · Git 基础：版本控制与提交模型</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<main class="lesson">
+
+  <h1>Git 基础：版本控制与提交模型</h1>
+  <p class="subtitle">AI 应用后端 Java 路线图 · 第 9 课（工程素养 ② Git/GitHub）· 预计 25 分钟</p>
+
+  <div class="mission">
+    🎯 本课服务于升级后的 <b>MISSION.md</b>：① 地基（CRUD）已出关，现在进 <b>② Git/GitHub 工程素养</b>。Git 不是"又会一个工具"——它是 L0 保命线（投初级岗要会）和 L2 工程素养的硬门槛，更是你后面所有项目（Docker 化、AI 后端）的托底。你这几轮正好在 <code>learn_02</code> 手动折腾 Git，还卡在 <b>amend 后强推被拒</b>。本课把 Git 的<b>三大区域模型</b>和<b>强推陷阱</b>讲透，正好治好你刚踩的坑。学完你要能口述：为什么 <code>commit</code> 是追加不是覆盖、<code>amend</code> 为什么会引发 <code>non-fast-forward</code>。
+  </div>
+
+  <h2>一、为什么 Git 排在地基期（先搞清意义）</h2>
+  <p>路线图把 Git 放在 ②，夹在 CRUD 和 Docker 之间，不是随便排的：</p>
+  <ul>
+    <li><b>备份 + 版本回溯</b>：代码改坏了能回到任意历史节点，不用手动复制文件夹。</li>
+    <li><b>协作底座</b>：以后进公司、做开源、接 AI 后端项目，全靠 Git 多人并行不撞车。</li>
+    <li><b>工程素养硬指标</b>：L0 投初级岗的简历门槛，L2 的"Git/Linux/Docker"第一项就是它。</li>
+  </ul>
+  <div class="callout">
+    <b>一句话：</b>CRUD 让你"写得出"，Git 让你"存得稳、丢不了、别人接得动"。两者都是地基，缺一不可。
+  </div>
+
+  <h2>🧠 先回忆（合上笔记答 2 题）</h2>
+  <p>间隔检索最能留住记忆。这两题直接连着你刚才的实操，先"捞"出来。</p>
+  <div class="quiz" id="recall">
+    <div class="q" data-ans="0">
+      <div class="stem">1. 路线图里，① 地基（CRUD）出关之后的下一阶段是？</div>
+      <div class="opts">
+        <button class="opt">② Git / GitHub</button>
+        <button class="opt">③ Docker</button>
+        <button class="opt">④ L1 Spring AI</button>
+        <button class="opt">⑤ L2 RAG</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="1">
+      <div class="stem">2. 你之前 amend 后 <code>git push</code> 被拒，报错里哪个词说明"本地历史落后/偏离远端"？</div>
+      <div class="opts">
+        <button class="opt">fatal: repository '...' not found</button>
+        <button class="opt">non-fast-forward</button>
+        <button class="opt">401 Unauthorized</button>
+        <button class="opt">branch 'main' already exists</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+  </div>
+
+  <h2>二、Git 三大区域模型（本课骨架）</h2>
+  <p>一切 Git 操作都绕不开这三个<b>本地</b>区域，再加一个远端。记住这张图：</p>
+  <div class="flow">
+    <div class="node"><div class="layer">工作区</div><div class="tag">你看到的文件夹</div></div>
+    <div class="arrow">git add →</div>
+    <div class="node"><div class="layer">暂存区</div><div class="tag">待提交清单</div></div>
+    <div class="arrow">git commit →</div>
+    <div class="node"><div class="layer">版本库</div><div class="tag">永久提交历史</div></div>
+    <div class="arrow">git push →</div>
+    <div class="node"><div class="layer">远程仓库</div><div class="tag">GitHub 服务器</div></div>
+  </div>
+  <ul>
+    <li><b>工作区</b>：你日常编辑的文件（<code>src/</code>、<code>pom.xml</code>）。</li>
+    <li><b>暂存区（Stage）</b>：<code>git add</code> 把改动"搬"到这里，相当于"我打算提交这些"。</li>
+    <li><b>版本库（Repository）</b>：<code>git commit</code> 把暂存区打包成一次<b>快照</b>，永久存进历史。</li>
+    <li><b>远程仓库</b>：GitHub 那台服务器，<code>git push</code> 把本地历史传上去。</li>
+  </ul>
+  <div class="clarify">
+    <h3>🔧 一个关键认知</h3>
+    <p class="q-line">被 <code>.gitignore</code> 忽略的（<code>target/</code>、<code>*.sqlite</code>、<code>.idea/</code>）<b>永远不会进暂存区</b>——所以你 <code>git status</code> 看不到它们，<code>git add .</code> 也加不进去。</p>
+  </div>
+
+  <h2>三、提交三板斧：add → commit → push</h2>
+  <p>改完代码后每次都用这三步。<b>commit 是追加，不是覆盖</b>——这是新手最该刻进脑子的一点。</p>
+  <div class="codeblock"><span class="c"># 1. 看哪些文件改了、哪些被忽略（提交前必看）</span>
+git status
+
+<span class="c"># 2. 把改动加入暂存区（. 表示当前目录全部；也可 git add 文件名 单文件）</span>
+git add .
+
+<span class="c"># 3. 生成一次永久提交，-m 后面是说明</span>
+git commit -m "描述这次改了啥，如：增加年龄字段校验"
+
+<span class="c"># 4. 同步到 GitHub（同样是追加，历史只增不减）</span>
+git push</div>
+  <div class="callout good">
+    <b>为什么"追加不是覆盖"？</b>每次 <code>commit</code> 都在历史链条<b>末尾接一个新节点</b>，旧节点原封不动保留（随时 <code>git log</code> 能看到、能退回）。所以你永远不用担心"提交会把之前搞丢"——这和"保存文件会覆盖原文件"完全不同。
+  </div>
+
+  <h2>四、分支与远程：master/main、origin 是什么</h2>
+  <div class="layer-grid">
+    <div class="layer-card">
+      <h3>分支 branch</h3>
+      <p class="ann">并行的时间线</p>
+      <p><code>git init</code> 默认分支叫 <code>master</code>；GitHub 现在默认叫 <code>main</code>。推送前用 <code>git branch -M main</code> 改名对齐，避免两边名字不一致。</p>
+    </div>
+    <div class="layer-card">
+      <h3>origin</h3>
+      <p class="ann">远程地址的"外号"</p>
+      <p><code>origin</code> 只是你本地给远程 URL 起的别名，存在 <code>.git/config</code>。改地址用 <code>git remote set-url origin 新地址</code>——<b>不用去 GitHub 网站改</b>。</p>
+    </div>
+    <div class="layer-card">
+      <h3>-u 上游</h3>
+      <p class="ann">记住跟踪关系</p>
+      <p><code>git push -u origin main</code> 第一次设好"上游"，之后直接 <code>git push</code> 即可，不用每次写 <code>origin main</code>。</p>
+    </div>
+  </div>
+
+  <h2>五、强推陷阱：你刚踩的坑（本课重点）</h2>
+  <p>你做了 <code>git commit --amend</code> 改写了上次提交，再 <code>git push</code> 被拒——这正是 B 类盲区（不懂"为什么"）。机制如下：</p>
+  <div class="codeblock"><span class="c"># 正常：每次 commit 在历史末尾接新节点</span>
+A → B → C        <span class="c"># C 是最新提交</span>
+
+<span class="c"># amend：把"紧挨着的上一次"提交替换成新内容（哈希变了）</span>
+A → B → C'       <span class="c"># C' 替换了 C，旧 C 没了</span>
+
+<span class="c"># 如果 C 之前已经 push 到 GitHub，远端是 A→B→C</span>
+<span class="c"># 你本地是 A→B→C' → 两边历史对不上 → 普通 push 被拒：</span>
+<span class="c">#   ! [rejected]  main -> main (non-fast-forward)</span>
+<span class="c"># 解决：强推覆盖远端历史（仅限你独自开发的安全场景）</span>
+git push --force-with-lease origin main</div>
+  <div class="callout">
+    <b>铁律：</b><code>--amend</code> 会<b>改写历史</b>。规则是——<b>已经 push 到 GitHub 的提交，不要 amend</b>（会造成本地/远端对不上，得强推对齐）。只有"刚提交完、还没 push、发现小错"才用 amend 救场。强推用 <code>--force-with-lease</code> 比裸 <code>--force</code> 稳，万一远端被别人改过它会拒绝，不盲目覆盖。
+  </div>
+  <div class="clarify">
+    <h3>🔧 你现在的实际处境</h3>
+    <p class="q-line">你 <code>learn_02</code> 之前 push 失败是因为<b>仓库名写错</b>（<code>learn-02-crud</code> 少了 <code>-demo-</code>），不是强推问题。后来你 amend 过一次，所以现在若 GitHub 上已有旧提交，<code>git push</code> 会 non-fast-forward。先 <code>git remote -v</code> 确认地址是 <code>learn-02-crud-demo.git</code>（无尾杠），再 <code>git push --force-with-lease origin main</code> 强推即可。</p>
+  </div>
+
+  <h2>六、本课小测（新知识，合上笔记答）</h2>
+  <div class="quiz" id="newquiz">
+    <div class="q" data-ans="3">
+      <div class="stem">3. Git 三大<b>本地</b>区域不包括下面哪个？</div>
+      <div class="opts">
+        <button class="opt">工作区</button>
+        <button class="opt">暂存区</button>
+        <button class="opt">版本库</button>
+        <button class="opt">远程仓库（GitHub）</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="1">
+      <div class="stem">4. <code>git commit</code> 对历史的影响是？</div>
+      <div class="opts">
+        <button class="opt">覆盖上一次提交</button>
+        <button class="opt">在历史末尾追加一个新节点</button>
+        <button class="opt">删除旧提交</button>
+        <button class="opt">什么也不做</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="1">
+      <div class="stem">5. <code>git commit --amend</code> 做了什么？</div>
+      <div class="opts">
+        <button class="opt">新增一个独立提交</button>
+        <button class="opt">改写（替换）紧挨着的上一次提交</button>
+        <button class="opt">撤销最近一次提交</button>
+        <button class="opt">把两个分支合并</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="1">
+      <div class="stem">6. 已经 push 到 GitHub 的提交，你本地又 amend 了，再 <code>git push</code> 会？</div>
+      <div class="opts">
+        <button class="opt">成功追加为新提交</button>
+        <button class="opt">被拒：non-fast-forward（历史冲突）</button>
+        <button class="opt">自动合并两边</button>
+        <button class="opt">静默删除远端旧提交</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="2">
+      <div class="stem">7. 解决 non-fast-forward、安全强推覆盖远端历史的命令是？</div>
+      <div class="opts">
+        <button class="opt">git push</button>
+        <button class="opt">git push --force</button>
+        <button class="opt">git push --force-with-lease origin main</button>
+        <button class="opt">git pull</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+  </div>
+
+  <h2>七、想深挖时，回看这些资料</h2>
+  <div class="sources">
+    📚 本工作区：
+    <ul>
+      <li><a href="../reference/git-basics.md">reference/git-basics.md</a> —— Git 区域模型 / 三板斧 / 分支远程 / 强推规则的压缩速查</li>
+      <li><a href="../reference/ai-backend-java-roadmap.md">reference/ai-backend-java-roadmap.md</a> —— L0–L3 总导航，确认 ② 在路线中的位置</li>
+      <li>你的实操记录：<a href="../reference/git-basics.md">git-basics.md</a> 末尾附了你 <code>learn_02</code> 卡点的解法</li>
+    </ul>
+    🔗 外部权威：
+    <ul>
+      <li><a href="https://git-scm.com/book/zh/v2">Pro Git（官方中文书，免费）</a> —— 最系统的 Git 教材，§1–§3 讲清区域与提交模型</li>
+      <li><a href="https://git-scm.com/docs">Git 官方文档</a> —— 命令语义存疑时查</li>
+      <li><a href="https://docs.github.com/zh">GitHub Docs（中文）</a> —— PAT 生成、建仓库、PR 流程</li>
+    </ul>
+  </div>
+
+  <div class="callout good">
+    <b>🤝 我是你的老师。</b>任何一处没懂（比如"暂存区到底有啥用""为什么 amend 会改哈希""--force-with-lease 比 --force 好在哪"），直接追问我。别带着疑惑结束这一课。
+  </div>
+
+  <footer>
+    🎓 第 9 课把 Git 这根工程素养的骨头搭起来了：三大区域模型 → 提交三板斧（追加不是覆盖）→ 分支/main/origin → <b>强推陷阱（amend 改写历史 → non-fast-forward → --force-with-lease）</b>。这正好对应你 <code>learn_02</code> 卡住的强推那步。<br>
+    下一步：<b>把 ② 实操收尾</b>——先在 PowerShell 跑 <code>git remote -v</code> 确认地址，再 <code>git push --force-with-lease origin main</code> 把 <code>learn_02</code> 推上 GitHub；然后把 <code>_01</code> 也 init + 推送。两端都上 GitHub，② 就算达标，进 ③ Docker。
+  </footer>
+
+</main>
+
+<script>
+  const explain = [
+    '✓ 正确：路线图顺序闸门是 ① 地基(CRUD) → ② Git/GitHub → ③ Docker → ④ L1 Spring AI → ⑤ L2 RAG。Git 是出关后的第一站。',
+    '✓ 正确：non-fast-forward 表示"你的本地分支 tip 落后于（或与）远端对应分支"，即本地历史和远端对不上，普通 push 被拒。fatal: repository not found 是地址写错，401 是认证失败，都不是这个意思。',
+    '✓ 正确：三大本地区域是 工作区 / 暂存区 / 版本库；远程仓库（GitHub）是第四个、独立在服务器上，不属于本地三区域。git push 才把版本库同步过去。',
+    '✓ 正确：commit 是追加——每次都在历史末尾接一个新节点，旧节点永远保留，可 git log 查看、可退回。它不像"保存文件"会覆盖原内容。',
+    '✓ 正确：--amend 把紧挨着的上一次提交替换成新内容（默认沿用上次文件，只改说明或补文件），旧提交的哈希消失、被新哈希取代。',
+    '✓ 正确：已 push 的提交被本地 amend 后，本地历史（C\'）和远端历史（C）分叉，普通 git push 会 non-fast-forward 被拒，需要强推对齐。',
+    '✓ 正确：--force-with-lease 比裸 --force 安全——若远端在你不知情时被别人改过，它会拒绝强推，避免盲目覆盖别人工作。配合 origin main 指定分支。'
+  ];
+  document.querySelectorAll('.q').forEach((q, qi) => {
+    const ans = +q.dataset.ans;
+    const opts = q.querySelectorAll('.opt');
+    const fb = q.querySelector('.feedback');
+    opts.forEach((btn, i) => {
+      btn.addEventListener('click', () => {
+        opts.forEach(o => o.disabled = true);
+        if (i === ans) {
+          btn.classList.add('correct');
+          fb.textContent = explain[qi];
+          fb.classList.add('ok');
+        } else {
+          btn.classList.add('wrong');
+          opts[ans].classList.add('correct');
+          fb.textContent = '✗ 再想想：' + explain[qi].replace('✓ 正确：', '');
+          fb.classList.add('no');
+        }
+      });
+    });
+  });
+</script>
+</body>
+</html>

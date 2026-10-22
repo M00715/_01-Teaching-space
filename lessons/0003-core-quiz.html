@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 3 课核心小测 · 不含测试</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<main class="lesson">
+
+  <h1>第 3 课核心小测（不含测试）</h1>
+  <p class="subtitle">只考 CRUD 必需的核心：#{} vs ${}、参数传递、foreach · 合上笔记答</p>
+
+  <div class="mission">🎯 这 3 题覆盖第 3 课里<b>对"能写 CRUD"真正必需</b>的部分。自动化测试不在范围内（已延后，见 MISSION.md）。答完看解析，卡住的地方就是记忆薄弱点。</div>
+
+  <div class="quiz">
+    <h2>检索练习</h2>
+    <p style="color:var(--muted);font-size:14px;margin-top:0">每题点一个选项，立刻看对错。答错看解析再回想。</p>
+
+    <div class="q" data-ans="1">
+      <div class="stem">1. 写查询 <code>WHERE name = ?</code> 时，下面哪个能防 SQL 注入？</div>
+      <div class="opts">
+        <button class="opt">WHERE name = '${name}'（字符串拼接）</button>
+        <button class="opt">WHERE name = #{name}（预编译占位符）</button>
+        <button class="opt">两者都能防注入</button>
+        <button class="opt">#{name} 只能用于数字</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-ans="1">
+      <div class="stem">2. Mapper 接口有两个参数，想写成 <code>WHERE name=#{n} AND age=#{a}</code>，正确写法是？</div>
+      <div class="opts">
+        <button class="opt">直接 (String name, int age)，SQL 里写 #{name} #{age}</button>
+        <button class="opt">(@Param("n") String name, @Param("a") int age)，SQL 写 #{n} #{a}</button>
+        <button class="opt">多参数只能用 Map 传</button>
+        <button class="opt">用 {name} 大括号语法</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-ans="1">
+      <div class="stem">3. 批量删除 <code>WHERE id IN (1, 2, 3)</code>，XML 里靠哪个标签把 List 展开成"括号+逗号"串？</div>
+      <div class="opts">
+        <button class="opt">&lt;if&gt; 条件判断</button>
+        <button class="opt">&lt;foreach&gt; 遍历集合</button>
+        <button class="opt">&lt;choose&gt; 分支</button>
+        <button class="opt">&lt;where&gt; 智能 WHERE</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+  </div>
+
+  <div class="callout good">
+    <b>🤝 全对 ≠ 真掌握。</b> 这 3 题是"识别题"。真正的掌握 = 合上课件，能在 <code>_01</code> 里自己写出：一个模糊查询 Mapper、一个 <code>@Param</code> 多参查询、一个 XML <code>&lt;foreach&gt;</code> 批量删除。答完若有卡壳，直接告诉我哪题，我针对性补。
+  </div>
+
+  <footer>下一课（暂不开启）：第 4 课 · 数据源、实体与事务。先把这几题和手感焊牢。</footer>
+</main>
+
+<script>
+  const explain = [
+    '✓ 正确：#{name} 生成 PreparedStatement 预编译参数（? 占位），值安全传入，防注入；${name} 是字符串拼接，有注入风险，仅用于表名/列名且需白名单。',
+    '✓ 正确：Mapper 多参数时 MyBatis 无法按名字匹配，必须用 @Param 起名，SQL 里用对应名字 #{n} #{a}。否则抛 "Parameter \'name\' not found"。',
+    '✓ 正确：<foreach> 遍历 List，open="(" close=")" 加括号、separator="," 加逗号，把 List 展开成 (1, 2, 3)，配合 IN 使用。'
+  ];
+  document.querySelectorAll('.q').forEach((q, qi) => {
+    const ans = +q.dataset.ans;
+    const opts = q.querySelectorAll('.opt');
+    const fb = q.querySelector('.feedback');
+    opts.forEach((btn, i) => {
+      btn.addEventListener('click', () => {
+        opts.forEach(o => o.disabled = true);
+        if (i === ans) {
+          btn.classList.add('correct');
+          fb.textContent = explain[qi];
+          fb.classList.add('ok');
+        } else {
+          btn.classList.add('wrong');
+          opts[ans].classList.add('correct');
+          fb.textContent = '✗ 再想想：' + explain[qi].replace('✓ 正确：', '');
+          fb.classList.add('no');
+        }
+      });
+    });
+  });
+</script>
+</body>
+</html>

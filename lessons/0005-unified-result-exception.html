@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 5 课 · 统一返回与全局异常处理</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<main class="lesson">
+
+  <h1>统一返回与全局异常处理</h1>
+  <p class="subtitle">Spring Boot CRUD 复习 · 第 5 课 / 共约 6 课 · 预计 20 分钟</p>
+
+  <div class="mission">
+    🎯 本课服务于 <b>MISSION.md</b>：第 1–4 课你已能写完整 CRUD（注解/XML Mapper、<code>@Transactional</code> 转账）。但打开你现在的 <code>UserController</code> 会发现——返回值<b>七国八制</b>：有时返回实体、有时返回列表、转账返回纯字符串、删除返回 <code>void</code>、批量删返回 <code>int</code>。前端每接一个接口都得换一种解析方式；一旦抛异常，Spring 还扔出一堆乱七八糟的默认错误 JSON。本课两件事：① 用 <code>Result&lt;T&gt;</code> 把<b>所有返回值包成同一种结构</b>；② 用 <code>@RestControllerAdvice</code> 把<b>所有异常兜成同一种错误结构</b>。
+  </div>
+
+  <h2>🧠 先回忆第四课（合上笔记答 3 题）</h2>
+  <p>间隔检索最能留住记忆。先把第四课的核心从脑子里"捞"出来，再进新课。点选项立刻看对错。</p>
+  <div class="quiz" id="recall">
+    <div class="q" data-ans="1">
+      <div class="stem">1. HikariCP 连接池主要解决了什么问题？</div>
+      <div class="opts">
+        <button class="opt">让 SQL 写起来更短</button>
+        <button class="opt">复用数据库连接，避免每次请求都现建连接</button>
+        <button class="opt">自动防 SQL 注入</button>
+        <button class="opt">代替 MyBatis 执行 SQL</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="1">
+      <div class="stem">2. <code>@Transactional</code> 应该加在哪一层？</div>
+      <div class="opts">
+        <button class="opt">加在 Mapper 接口方法上</button>
+        <button class="opt">加在 Service 层（组合多个 Mapper 调用的业务方法）</button>
+        <button class="opt">加在 Controller 上</button>
+        <button class="opt">不用加，Spring 自动管</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="2">
+      <div class="stem">3. 一个方法里先 update A、再 update B，中间抛异常，<b>不加事务</b>会怎样？</div>
+      <div class="opts">
+        <button class="opt">A、B 都自动回滚</button>
+        <button class="opt">什么都不发生</button>
+        <button class="opt">A 改了、B 没改，数据不一致</button>
+        <button class="opt">Spring 会报错阻止执行</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+  </div>
+
+  <h2>一、问题：你的接口返回"七国八制"</h2>
+  <p>看你现在 <code>UserController</code> 的真实返回值——同样都是 <code>/users</code> 下的接口，前端拿到的是<b>完全不同的形状</b>：</p>
+
+  <div class="layer-grid">
+    <div class="layer-card">
+      <h3>成功时，形状各异</h3>
+      <p class="ann">前端每接一个接口都得换写法</p>
+      <p><code>POST /users</code> → 返回一个 <b>User 对象</b><br>
+      <code>GET /users</code> → 返回 <b>List&lt;User&gt; 数组</b><br>
+      <code>POST /users/transfer</code> → 返回纯 <b>String "转账成功"</b><br>
+      <code>DELETE /users/{id}</code> → 返回 <b>void（只有 HTTP 状态）</b><br>
+      <code>DELETE /users/batch</code> → 返回 <b>int（影响行数）</b></p>
+    </div>
+    <div class="layer-card">
+      <h3>失败时，更糟</h3>
+      <p class="ann">异常"裸奔"出去</p>
+      <p>转账余额不足抛异常，Spring 默认返回一长串：<br>
+      <code>{timestamp, status, error, path, message, ...}</code><br>
+      字段又多又乱，和上面的成功结构<b>完全不是一回事</b>。前端得为"成功一种解析、失败另一种解析"写两套逻辑。</p>
+    </div>
+  </div>
+
+  <div class="callout">
+    <b>痛点一句话：</b>前端永远不知道"这次拿到的是对象、数组、还是报错"。解决办法就一个——<b>所有接口，无论成功失败，都返回同一种结构</b> <code>{ code, msg, data }</code>。
+  </div>
+
+  <h2>二、统一返回体：Result&lt;T&gt;</h2>
+  <p>定义一个泛型包裹类，把"业务数据"塞进 <code>data</code>，再统一带上 <code>code</code>（状态码）和 <code>msg</code>（提示）：</p>
+
+  <div class="codeblock"><span class="k">@Data</span>
+<span class="k">public class</span> <span class="t">Result</span>&lt;T&gt; {
+    <span class="k">private int</span>    code;     <span class="c">// 业务码：200=成功，非200=失败</span>
+    <span class="k">private</span> String msg;      <span class="c">// 提示信息</span>
+    <span class="k">private</span> T      data;     <span class="c">// 真正的数据（任意类型，也可为 null）</span>
+
+    <span class="c">// 成功：带回数据</span>
+    <span class="k">public static</span> &lt;T&gt; <span class="t">Result</span>&lt;T&gt; <span class="m">success</span>(T data) {
+        <span class="t">Result</span>&lt;T&gt; r = <span class="k">new</span> <span class="t">Result</span>&lt;&gt;();
+        r.code = 200; r.msg = <span class="m">"ok"</span>; r.data = data;
+        <span class="k">return</span> r;
+    }
+    <span class="c">// 失败：只带码和消息</span>
+    <span class="k">public static</span> &lt;T&gt; <span class="t">Result</span>&lt;T&gt; <span class="m">error</span>(<span class="k">int</span> code, String msg) {
+        <span class="t">Result</span>&lt;T&gt; r = <span class="k">new</span> <span class="t">Result</span>&lt;&gt;();
+        r.code = code; r.msg = msg;        <span class="c">// data 保持 null</span>
+        <span class="k">return</span> r;
+    }
+}</div>
+
+  <div class="clarify">
+    <h3>🔧 code / msg / data 的约定</h3>
+    <ol>
+      <li class="q-line"><b>code</b>：业务状态码，不是 HTTP 状态码。<code>200</code> 表示业务成功；失败用 <code>400/500</code> 等自定义语义（如余额不足 = 400）。</li>
+      <li class="q-line"><b>msg</b>：给人看的提示，成功可写 <code>"ok"</code>，失败写具体原因（<code>"余额不足"</code>）。</li>
+      <li class="q-line"><b>data</b>：成功时放业务数据（一个 User、一个列表、甚至 <code>"转账成功"</code> 字符串）；失败时通常 <code>null</code>。</li>
+    </ol>
+    <p>有了它，前端只要写一套解析：<code>if (result.code == 200) 用 result.data; else 弹 result.msg;</code> —— 成功失败一视同仁。</p>
+  </div>
+
+  <h2>三、改造 Controller：每个接口都包一层</h2>
+  <p>把原来"直接返回实体/字符串/void"的写法，改成返回 <code>Result&lt;...&gt;</code>，用工厂方法包起来：</p>
+
+  <div class="codeblock"><span class="c">// 改前：返回类型五花八门</span>
+<span class="a">@PostMapping</span>
+<span class="k">public</span> <span class="t">User</span> <span class="m">create</span>(<span class="a">@RequestBody</span> User user) { <span class="k">return</span> userService.create(user); }
+
+<span class="a">@PostMapping</span>(<span class="m">"/transfer"</span>)
+<span class="k">public</span> String <span class="m">transfer</span>(<span class="a">@RequestBody</span> TransferRequest req) {
+    userService.transfer(...); <span class="k">return</span> <span class="m">"转账成功"</span>;
+}
+
+<span class="c">// 改后：清一色 Result&lt;T&gt;</span>
+<span class="a">@PostMapping</span>
+<span class="k">public</span> <span class="t">Result</span>&lt;User&gt; <span class="m">create</span>(<span class="a">@RequestBody</span> User user) {
+    <span class="k">return</span> <span class="t">Result</span>.<span class="m">success</span>(userService.create(user));
+}
+
+<span class="a">@PostMapping</span>(<span class="m">"/transfer"</span>)
+<span class="k">public</span> <span class="t">Result</span>&lt;String&gt; <span class="m">transfer</span>(<span class="a">@RequestBody</span> TransferRequest req) {
+    userService.transfer(req.getFromName(), req.getToName(), req.getAmount());
+    <span class="k">return</span> <span class="t">Result</span>.<span class="m">success</span>(<span class="m">"转账成功"</span>);
+}</div>
+
+  <p>注意：<code>delete</code> 原来返回 <code>void</code>，现在可以返回 <code>Result&lt;Void&gt;</code> 或 <code>Result&lt;String&gt;</code>（"删除成功"）。<b>所有接口签名统一了</b>，前端解析逻辑也统一了。</p>
+
+  <h2>四、全局异常处理：别让异常"裸奔"</h2>
+  <p>上面只解决了"成功时结构统一"。<b>失败时</b>如果 Service 抛异常（如余额不足），Spring 仍会吐默认错误 JSON。用 <code>@RestControllerAdvice</code> 全局拦截，转成我们的 <code>Result</code>：</p>
+
+  <div class="codeblock"><span class="a">@RestControllerAdvice</span>   <span class="c">// = 全局增强所有 @RestController</span>
+<span class="k">public class</span> <span class="t">GlobalExceptionHandler</span> {
+
+    <span class="c">// 捕获所有 RuntimeException（含你转账里的余额不足/用户不存在）</span>
+    <span class="a">@ExceptionHandler</span>(<span class="t">RuntimeException</span>.<span class="k">class</span>)
+    <span class="k">public</span> <span class="t">Result</span>&lt;Void&gt; <span class="m">handleBiz</span>(<span class="t">RuntimeException</span> e) {
+        <span class="k">return</span> <span class="t">Result</span>.<span class="m">error</span>(500, e.getMessage());
+    }
+}</div>
+
+  <div class="callout good">
+    <b>🔍 现在转账余额不足，前端拿到的是：</b>
+    <code>{"code":500, "msg":"转出用户不存在或余额不足：张三", "data":null}</code><br>
+    和成功时 <code>{"code":200, "msg":"ok", "data":{...}}</code> <b>同一个结构</b>。前端一套解析通吃成功失败。
+  </div>
+
+  <div class="clarify">
+    <h3>🔧 @RestControllerAdvice 是什么</h3>
+    <ol>
+      <li class="q-line"><code>@ControllerAdvice</code> 是 Spring 的"全局增强"：它里写的方法，会对<b>所有</b> Controller 生效。</li>
+      <li class="q-line">加 <code>@RestControllerAdvice</code> = <code>@ControllerAdvice</code> + <code>@ResponseBody</code>，意思是"拦截后返回的是 JSON（不是跳页面）"——正合 REST API。</li>
+      <li class="q-line"><code>@ExceptionHandler(X.class)</code> 指定"捕获哪类异常"。可以写多个方法分别处理不同异常（如参数错用 <code>IllegalArgumentException</code> → 400，其他 → 500）。</li>
+    </ol>
+  </div>
+
+  <h2>五、在 _01 里动手（可选 · 进阶）</h2>
+  <ol>
+    <li>新建 <code>common/Result.java</code>（上面的泛型类，放 <code>learn.springboot.common</code> 包）。</li>
+    <li>把 <code>UserController</code> 所有方法返回值改成 <code>Result&lt;...&gt;</code>，用 <code>Result.success(...)</code> 包一层。</li>
+    <li>新建 <code>common/GlobalExceptionHandler.java</code>，写 <code>@RestControllerAdvice</code> + 一个 <code>@ExceptionHandler(RuntimeException.class)</code>。</li>
+    <li>重启项目，<code>POST /users/transfer</code> 发一个余额不足 / 收方不存在的请求，确认返回的是整洁的 <code>Result</code> 错误结构，而不是 Spring 默认那一坨。</li>
+  </ol>
+  <div class="callout">
+    <b>📌 先别慌：</b>统一返回是"工程规范"，不是 CRUD 的必需功能。你现在的接口"能用"，只是不够规范。本课是让你知道<b>生产级 API 长什么样</b>——等以后写真项目，这层结构几乎是标配。不强制改你现在的代码。
+  </div>
+
+  <h2>六、本课小测（新知识，合上笔记答）</h2>
+  <div class="quiz" id="newquiz">
+    <div class="q" data-ans="0">
+      <div class="stem">4. 为什么要把所有接口的返回值统一成 Result 结构？</div>
+      <div class="opts">
+        <button class="opt">让前端永远拿到 {code,msg,data} 同一种结构，成功失败一套解析</button>
+        <button class="opt">因为 Result 能提升数据库查询速度</button>
+        <button class="opt">因为 Spring 强制要求返回 Result</button>
+        <button class="opt">为了减少代码行数</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="2">
+      <div class="stem">5. 标准的 Result&lt;T&gt; 一般包含哪三个字段？</div>
+      <div class="opts">
+        <button class="opt">id / name / age</button>
+        <button class="opt">status / body / header</button>
+        <button class="opt">code / msg / data</button>
+        <button class="opt">success / fail / error</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="1">
+      <div class="stem">6. <code>@RestControllerAdvice</code> + <code>@ExceptionHandler</code> 的作用是？</div>
+      <div class="opts">
+        <button class="opt">给所有接口加速</button>
+        <button class="opt">全局拦截异常，统一转成 Result 错误结构返回</button>
+        <button class="opt">代替 Controller 处理请求</button>
+        <button class="opt">自动帮写 SQL</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="3">
+      <div class="stem">7. 转账抛"余额不足"异常，如果没写全局异常处理，前端实际拿到的是？</div>
+      <div class="opts">
+        <button class="opt">{"code":500,"msg":"余额不足"} 这种整洁结构</button>
+        <button class="opt">一个空响应</button>
+        <button class="opt">HTTP 200 且 data 为 null</button>
+        <button class="opt">Spring 默认的混乱错误 JSON（timestamp/status/error/path/message）</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+  </div>
+
+  <h2>七、想深挖时，回看这些笔记</h2>
+  <div class="sources">
+    📚 你的 ima 一手资料（在《Java后端课程资料》知识库）：
+    <ul>
+      <li>Spring MVC 与 RESTful.md —— @ControllerAdvice / @ExceptionHandler 全局处理</li>
+      <li>统一返回结果封装.md —— Result 结构设计与约定</li>
+    </ul>
+    🔗 外部权威：
+    <ul>
+      <li><a href="https://docs.spring.io/spring-framework/reference/web/webmvc/mvc-controller/ann-advice.html">Spring 官方 · Controller Advice</a></li>
+      <li><a href="https://www.baeldung.com/global-error-handler-spring-rest">Baeldung · Error Handling for REST</a></li>
+    </ul>
+  </div>
+
+  <div class="callout good">
+    <b>🤝 我是你的老师。</b>任何一处没懂（比如「Result 的 data 能不能放列表」「多个 @ExceptionHandler 怎么排序」），直接追问我。别带着疑惑进下一课。
+  </div>
+
+  <footer>
+    下一课预告：<b>第 6 课 · 输入校验与分页（收官）</b> —— 用 Bean Validation（<code>@NotNull</code>/<code>@Size</code>）挡住脏数据、用 <code>PageHelper</code>/<code>Pageable</code> 给列表加分页，把 CRUD 从"能用"补成"完整"。
+  </footer>
+
+</main>
+
+<script>
+  const explain = [
+    '✓ 正确：连接池预先建好一批连接复用，避免每个请求都经历 TCP 握手+鉴权去新建连接，大幅提升并发性能。',
+    '✓ 正确：事务要圈住"业务动作"——是 Service 把多个 Mapper 调用组合成一步业务，所以在 Service 层加 @Transactional 才有意义；Mapper 单条 SQL 本身已原子。',
+    '✓ 正确：不加事务时每条 SQL 各自提交（autocommit）。第一步成功已落库，第二步异常不会回滚，导致 A 改了 B 没改，数据不一致。',
+    '✓ 正确：统一返回让前端永远拿到 {code,msg,data} 同一种结构，成功和失败都能用同一套逻辑解析，不用为每个接口写不同解析。',
+    '✓ 正确：标准 Result<T> 三字段是 code（业务状态码）/ msg（提示）/ data（业务数据，可为 null）。其他命名都不规范。',
+    '✓ 正确：@RestControllerAdvice 是全局增强所有 @RestController，配合 @ExceptionHandler 捕获指定异常，统一转成 Result 错误结构返回，避免异常裸奔成 Spring 默认错误 JSON。',
+    '✓ 正确：没写全局异常处理时，异常会冒泡到 Spring，返回默认的错误 JSON（含 timestamp/status/error/path/message 等一堆字段），和成功结构完全不一致。'
+  ];
+  document.querySelectorAll('.q').forEach((q, qi) => {
+    const ans = +q.dataset.ans;
+    const opts = q.querySelectorAll('.opt');
+    const fb = q.querySelector('.feedback');
+    opts.forEach((btn, i) => {
+      btn.addEventListener('click', () => {
+        opts.forEach(o => o.disabled = true);
+        if (i === ans) {
+          btn.classList.add('correct');
+          fb.textContent = explain[qi];
+          fb.classList.add('ok');
+        } else {
+          btn.classList.add('wrong');
+          opts[ans].classList.add('correct');
+          fb.textContent = '✗ 再想想：' + explain[qi].replace('✓ 正确：', '');
+          fb.classList.add('no');
+        }
+      });
+    });
+  });
+</script>
+</body>
+</html>

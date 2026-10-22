@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 3 课 · MyBatis CRUD 细节：注解、参数、映射与验证</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<main class="lesson">
+
+  <h1>MyBatis CRUD 细节：注解、参数、映射与验证</h1>
+  <p class="subtitle">Spring Boot CRUD 复习 · 第 3 课 / 共约 6 课 · 预计 25 分钟</p>
+
+  <div class="mission">
+    🎯 本课服务于 <b>MISSION.md</b>：你第 2 课已经把 <code>Controller → Service → Mapper → DB</code> 的骨架跑通了。现在把骨架里那几行 CRUD <b>真正吃透</b>——两种写法怎么选、参数怎么传才<b>安全</b>、结果怎么映射回对象、以及怎么<b>证明</b> CRUD 真的对。
+  </div>
+
+  <h2>一、两种 Mapper 写法：注解 vs XML</h2>
+  <p>你第 2 课用的是<b>注解式</b>——SQL 直接写在接口方法上。MyBatis 还支持 <b>XML 式</b>（SQL 抽到独立 .xml）。先看清各自适合什么：</p>
+
+  <div class="layer-grid">
+    <div class="layer-card">
+      <h3>注解式（你现在的）</h3>
+      <p class="ann">SQL 写在方法上</p>
+      <p>一个方法旁边就是它的 SQL，直观、短。缺点：SQL 一长、还要<b>动态拼条件</b>就难看，且 IDE 帮不上 XML 的校验。</p>
+    </div>
+    <div class="layer-card">
+      <h3>XML 式</h3>
+      <p class="ann">SQL 抽到 UserMapper.xml</p>
+      <p>接口只声明方法，SQL 写在 <code>resources/.../UserMapper.xml</code>。优点：<b>动态 SQL</b>（<code>&lt;if&gt;</code>/<code>&lt;foreach&gt;</code>）、超长 SQL 好维护、SQL 与 Java 解耦。</p>
+    </div>
+  </div>
+
+  <div class="codeblock"><span class="c">// 注解式（简单 CRUD 用这个正好）</span>
+<span class="a">@Select</span>(<span class="m">"SELECT * FROM user WHERE id = #{id}"</span>)
+User findById(Long id);
+
+<span class="c">// XML 式：接口只声明</span>
+List&lt;User&gt; findByCondition(UserQuery q);
+
+<span class="c">// —— 对应的 UserMapper.xml ——</span>
+&lt;select id="findByCondition" resultType="learn.springboot.entity.User"&gt;
+  SELECT * FROM user
+  &lt;where&gt;
+    &lt;if test="q.name != null"&gt; AND name = #{q.name} &lt;/if&gt;
+    &lt;if test="q.age != null"&gt; AND age = #{q.age} &lt;/if&gt;
+  &lt;/where&gt;
+&lt;/select&gt;
+
+<span class="c"># 让 MyBatis 找到 XML（application.yaml）</span>
+mybatis:
+  mapper-locations: classpath*:mapper/*.xml</div>
+
+  <div class="callout">
+    <b>📌 怎么选？</b> 简单 CRUD 用<b>注解</b>（你目前全用注解，正确）；遇到<b>动态条件、超长 SQL</b> 再换 XML。不用一上来就 XML。
+  </div>
+
+  <h2>二、#{} 和 ${}：一个保命的区别</h2>
+  <p>这是 CRUD 里<b>最容易写出安全漏洞</b>的地方，必须分清：</p>
+  <ul>
+    <li><code>#{name}</code> → <b>预编译参数占位符</b>。MyBatis 生成 <code>PreparedStatement</code>，用 <code>?</code> 占位，参数值<b>安全地传入</b>。→ <b>防 SQL 注入</b>。</li>
+    <li><code>${name}</code> → <b>字符串拼接</b>。把内容<b>直接拼进 SQL 文本</b>。→ 有注入风险，只能用于"表名/列名"这种不能预编译的地方（且必须白名单校验）。</li>
+  </ul>
+
+  <div class="clarify">
+    <h3>🔧 一个对比就懂为什么 ${} 危险</h3>
+    <ol>
+      <li class="q-line">安全：<code>WHERE name = #{name}</code> → 实际执行 <code>WHERE name = ?</code>，参数值是 <code>'张三'</code>，无法越界。</li>
+      <li class="q-line">危险：<code>WHERE name = '${name}'</code> → 若有人传入 <code>' OR '1'='1</code>，SQL 变成 <code>WHERE name = '' OR '1'='1'</code> → <b>恒为真，整张表被拖走</b>。</li>
+    </ol>
+    <p>你第 2 课骨架里用的全是 <code>#{}</code>，正确。<b>永远优先 #{}</b>，只有当要动态指定<b>表名/列名</b>时才用 <code>${}</code>，且必须做白名单校验。</p>
+  </div>
+
+  <h2>三、参数怎么传</h2>
+  <div class="codeblock"><span class="c">// ① 单个参数：名字任意，建议用属性名</span>
+<span class="a">@Select</span>(<span class="m">"SELECT * FROM user WHERE id = #{id}"</span>)
+User findById(Long id);
+
+<span class="c">// ② 多个参数：用 @Param 起名</span>
+<span class="a">@Select</span>(<span class="m">"SELECT * FROM user WHERE name=#{n} AND age=#{a}"</span>)
+User findByNameAge(<span class="a">@Param</span>("n") String name, <span class="a">@Param</span>("a") int age);
+
+<span class="c">// ③ 对象参数：#{属性名} 自动取对象的 getter</span>
+<span class="a">@Insert</span>(<span class="m">"INSERT INTO user(name,age,email) VALUES(#{name},#{age},#{email})"</span>)
+void insert(User user);
+
+<span class="c">// ④ 集合参数（IN 查询）：配合 &lt;foreach&gt;（XML 写法）</span>
+&lt;delete id="deleteByIds"&gt;
+  DELETE FROM user WHERE id IN
+  (&lt;foreach collection="ids" item="id" separator=","&gt; #{id} &lt;/foreach&gt;)
+&lt;/delete&gt;</div>
+
+  <h2>四、结果怎么映射回对象</h2>
+  <ul>
+    <li><b>默认</b>：SELECT 的<b>列名</b>与实体<b>字段名</b>按名字对应（不区分大小写）。你第 2 课的 <code>User(id, name, email)</code> 列名=字段名，所以 <code>SELECT *</code> 直接映射成功。</li>
+    <li><b>下划线转驼峰</b>：数据库常用 <code>user_name</code>，Java 用 <code>userName</code>。在 <code>application.yaml</code> 加 <code>mybatis.configuration.map-underscore-to-camel-case: true</code>，MyBatis 自动把 <code>user_name</code> → <code>userName</code>。</li>
+    <li><b>显式映射</b>：列名和字段名不一致、又不想开全局驼峰时，用 <code>@Results</code>/<code>@Result</code>（注解）或 <code>&lt;resultMap&gt;</code>（XML）指定 <code>column → property</code>。</li>
+  </ul>
+  <div class="codeblock"><span class="c"># application.yaml 加一行，下划线列自动映射驼峰字段</span>
+mybatis:
+  configuration:
+    map-underscore-to-camel-case: true</div>
+
+  <h2>五、怎么证明 CRUD 真的对 <span style="font-size:14px;font-weight:400;color:var(--muted)">（本节属进阶，可延后）</span></h2>
+  <p>手写 CRUD 最易错在三处：<b>SQL 拼错</b>、<b>参数名对不上</b>、<b>映射错</b>。两种验证手段：</p>
+  <ul>
+    <li><b>手动验证（你已会，够用）</b>：curl / Postman 把 5 个端点各跑一遍，看返回。<b>"能写 CRUD"这个目标，靠它就能验证。</b></li>
+    <li><b>自动化测试（进阶·可延后）</b>：<code>@SpringBootTest</code> 启动上下文，<code>@Autowired UserService</code>，插入→查询→断言。测试里加 <code>@Transactional</code> 可<b>自动回滚</b>，不污染数据库。<b>它是一套独立技能，等你 CRUD 写顺了再学完全来得及。</b></li>
+  </ul>
+  <div class="codeblock"><span class="a">@SpringBootTest</span>
+class UserServiceTest {
+    <span class="a">@Autowired</span> UserService service;
+
+    <span class="a">@Test</span> <span class="a">@Transactional</span>   <span class="c">// 跑完自动回滚</span>
+    void create_then_find() {
+        User u = service.create(new User(null, "张三", 20, "z@s.com"));
+        User got = service.findById(u.getId());
+        assertEquals("张三", got.getName());   <span class="c">// 断言 CRUD 真的对</span>
+    }
+}</div>
+
+  <div class="callout">
+    <b>🧭 别被这段代码吓到——它其实你 90% 都会了</b><br>
+    把它和你在第 2 课写的 <code>UserService</code> 对照，只有 <b>4 个新东西</b>，其余全是老朋友：<br>
+    ① <code>@SpringBootTest</code> = "把整个 Spring 应用启动起来"（本就要启动才跑）；<br>
+    ② <code>@Autowired</code> = 你早会的注入，这里注入 <code>UserService</code>/<code>UserMapper</code>；<br>
+    ③ <code>@Test</code> = 打个标记，告诉工具"<b>这个方法请自动帮我跑</b>"（你不用手动调它）；<br>
+    ④ <code>assertEquals(期望, 实际)</code> = "检查两者相等，不等就报错" —— 就是 if 判断的自动化版。<br>
+    <b>所以整段意思就是：启动应用 → 注入 Service → 存一条 → 查出来 → 检查名字对不对。</b>你平时用 curl 手点，它就是把这套动作写成代码自动跑。
+  </div>
+
+  <h2>六、动手任务（约 20 分钟）</h2>
+  <ol>
+    <li>给 <code>UserMapper</code> 加一个<b>按名字模糊查询</b>：<code>List&lt;User&gt; findByNameLike(@Param("kw") String kw);</code>，注解写 <code>SELECT * FROM user WHERE name LIKE '%'||#{kw}||'%'</code>（SQLite 用 <code>||</code> 拼接）。</li>
+    <li>加一个<b>批量删除</b>：<code>int deleteByIds(@Param("ids") List&lt;Long&gt; ids);</code>，用 <b>XML + &lt;foreach&gt;</b> 写（练 XML 写法，配好 <code>mapper-locations</code>）。</li>
+    <li><b>（进阶·可选）</b>写一个 <code>@SpringBootTest</code> 测试：插入一条再查出来，断言 <code>name</code> 相等。<b>不会可以先跳过</b>——它不影响你写出 CRUD，等想学"自动验证"时再回来做。</li>
+  </ol>
+
+  <div class="callout">
+    <b>⚠️ 做第 1 题时必踩的坑：路径冲突 → 500 Ambiguous handler methods</b><br>
+    若把模糊查询写成 <code>@GetMapping("/{name}")</code>，它会和已有的 <code>@GetMapping("/{id}")</code> <b>形状完全一样</b>（都是 <code>/users/{一段}</code>），于是任何 <code>/users/xxx</code> 请求同时匹配两个方法，Spring 无法选择，抛
+    <code>IllegalStateException: Ambiguous handler methods mapped</code>。<br>
+    ✅ 正确做法：给查询<b>独立路径</b>——<code>@GetMapping("/search")</code> + <code>@RequestParam String name</code>（请求 <code>/users/search?name=张</code>，搜索场景最地道）；或 <code>@GetMapping("/name/{name}")</code>（路径变量形式，参数必须加 <code>@PathVariable</code>，且名字含 <code>/ ? &amp;</code> 会破坏 URL，不如查询参数版稳妥）。<br>
+    📌 顺带三个坑：① URL 里的中文会显示成 <code>%E5%BC%A0</code>，那是正常的百分号编码，<b>不是乱码、也不是错误来源</b>；② <code>findByNameLike</code> 返回的是 <code>List&lt;User&gt;</code>，Controller/Service 的返回类型要和 Mapper 一致，别强转成一个 <code>User</code>（运行期会 <code>ClassCastException</code>）；③ 注解路径<b>别加尾斜杠</b>——<code>@GetMapping("/search/")</code> 在新版 Spring 只匹配带斜杠的 URL，会让你哪怕参数写对也 <b>404</b>；<code>@RequestParam</code> 配 <code>?name=值</code>、<code>@PathVariable</code> 配 <code>/值</code>，不能混。
+  </div>
+
+  <h2>七、小测：立刻检索一遍（合上笔记答）</h2>
+  <div class="quiz">
+    <h2>检索练习</h2>
+    <p style="color:var(--muted);font-size:14px;margin-top:0">每题点一个选项，立刻看对错。答错看解析再回想。</p>
+
+    <div class="q" data-ans="0">
+      <div class="stem">1. <code>#{name}</code> 和 <code>${name}</code> 的核心区别是？</div>
+      <div class="opts">
+        <button class="opt">#{} 预编译防注入，${} 字符串拼接有注入风险</button>
+        <button class="opt">${} 预编译防注入，#{} 字符串拼接</button>
+        <button class="opt">两者完全没区别</button>
+        <button class="opt">#{} 只能用于数字</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-ans="1">
+      <div class="stem">2. 需要"按条件动态拼 WHERE"（有时加 name，有时加 age），推荐用？</div>
+      <div class="opts">
+        <button class="opt">把 SQL 写死在注解里</button>
+        <button class="opt">XML + &lt;if&gt; 动态 SQL</button>
+        <button class="opt">不用 SQL，改用 Java 过滤</button>
+        <button class="opt">多写几个固定接口</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-ans="2">
+      <div class="stem">3. 数据库列是 <code>user_name</code>，Java 字段是 <code>userName</code>，最省事的对齐办法是？</div>
+      <div class="opts">
+        <button class="opt">把 Java 字段改名成 user_name</button>
+        <button class="opt">用 @Param 注解</button>
+        <button class="opt">开 map-underscore-to-camel-case: true</button>
+        <button class="opt">没法自动映射</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-ans="1">
+      <div class="stem">4. 比手动 curl 更稳的"证明 CRUD 真的对"的手段是？</div>
+      <div class="opts">
+        <button class="opt">什么都不用，凭感觉</button>
+        <button class="opt">写 @SpringBootTest 自动化测试并断言</button>
+        <button class="opt">多写几个接口</button>
+        <button class="opt">靠肉眼看返回</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+  </div>
+
+  <h2>八、想深挖时，回看这些笔记</h2>
+  <div class="sources">
+    📚 你的 ima 一手资料（在《Java后端课程资料》知识库）：
+    <ul>
+      <li><a href="ima://kb/7516478123286370">MyBatis.md</a> —— 注解/XML 双写法、动态 SQL、参数与结果映射</li>
+      <li><a href="ima://kb/7516478123286370">数据库MySQL与JDBC.md</a> —— PreparedStatement 与 SQL 注入原理</li>
+      <li><a href="ima://kb/7516478123286370">SSM框架整合.md</a> —— Mapper 层与 Spring 的整合配置</li>
+    </ul>
+    🔗 外部权威：<a href="https://mybatis.org/mybatis-3/">MyBatis 官方文档</a>（Dynamic SQL、Mapper XML 章节）
+  </div>
+
+  <div class="callout good">
+    <b>🤝 我是你的老师。</b>有任何一处没懂（比如「<code>${}</code> 到底什么场景才该用」「<code>&lt;foreach&gt;</code> 怎么写才对」），直接追问我。别带着疑惑进下一课。
+  </div>
+
+  <footer>
+    下一课预告：<b>第 4 课 · 数据源、实体与事务</b> —— 连接从哪来（DataSource/HikariCP）、<code>@Transactional</code> 到底管什么、为什么说"事务要在 Service 层开"。
+  </footer>
+
+</main>
+
+<script>
+  const explain = [
+    '✓ 正确：#{} 生成 PreparedStatement 预编译参数，防 SQL 注入；${} 是字符串拼接，有注入风险，仅用于表名/列名且需白名单。',
+    '✓ 正确：动态条件拼 WHERE 用 XML 的 <if>/<choose> 最合适，注解里硬写会很乱。',
+    '✓ 正确：开 map-underscore-to-camel-case: true，下划线列名会自动映射到驼峰字段，最省事。',
+    '✓ 正确：@SpringBootTest 自动化测试能稳定抓出 SQL 拼错、参数名对不上、映射错等问题，比手动 curl 可靠。'
+  ];
+  document.querySelectorAll('.q').forEach((q, qi) => {
+    const ans = +q.dataset.ans;
+    const opts = q.querySelectorAll('.opt');
+    const fb = q.querySelector('.feedback');
+    opts.forEach((btn, i) => {
+      btn.addEventListener('click', () => {
+        opts.forEach(o => o.disabled = true);
+        if (i === ans) {
+          btn.classList.add('correct');
+          fb.textContent = explain[qi];
+          fb.classList.add('ok');
+        } else {
+          btn.classList.add('wrong');
+          opts[ans].classList.add('correct');
+          fb.textContent = '✗ 再想想：' + explain[qi].replace('✓ 正确：', '');
+          fb.classList.add('no');
+        }
+      });
+    });
+  });
+</script>
+</body>
+</html>

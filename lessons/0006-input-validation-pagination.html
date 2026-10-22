@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 6 课 · 输入校验与分页</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<main class="lesson">
+
+  <h1>输入校验与分页</h1>
+  <p class="subtitle">Spring Boot CRUD 复习 · 第 6 课 / 共 6 课（收官）· 预计 22 分钟</p>
+
+  <div class="mission">
+    🎯 本课服务于 <b>MISSION.md</b>：前 5 课你已经能写出"结构统一、异常可控"的 CRUD。但还差两件生产级必备件：① <b>脏数据能直接进库</b>——现在 <code>create</code> 把客户端 JSON 直接收成 <code>User</code> 实体，<code>name</code> 空、<code>age</code> 负数、<code>email</code> 乱写都能落库；② <b>列表一次全返回</b>——<code>findAll</code> 不分页，数据多了既慢又浪费带宽。本课两件事：用 <b>Bean Validation</b> 在入口挡住脏数据、用 <b>手写 LIMIT/OFFSET + COUNT</b> 给列表加分页。两者都<b>复用第 5 课的 Result 与全局异常处理</b>。
+  </div>
+
+  <h2>🧠 先回忆第五课（合上笔记答 3 题）</h2>
+  <p>间隔检索最能留住记忆。把第 5 课的核心从脑子里"捞"出来，再进新课。点选项立刻看对错。</p>
+  <div class="quiz" id="recall">
+    <div class="q" data-ans="2">
+      <div class="stem">1. 第 5 课给所有接口套上的"统一返回结构"叫什么、含哪三字段？</div>
+      <div class="opts">
+        <button class="opt">Page 对象：page / size / list</button>
+        <button class="opt">Response 对象：status / body / header</button>
+        <button class="opt">Result&lt;T&gt;：code / msg / data</button>
+        <button class="opt">Wrapper：success / fail / error</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="1">
+      <div class="stem">2. 为什么第 5 课"不写 try-catch、改用全局异常处理"？</div>
+      <div class="opts">
+        <button class="opt">因为 try-catch 会让程序变慢</button>
+        <button class="opt">异常会冒泡到框架层，@ExceptionHandler 一处兜住所有异常，成功失败同结构</button>
+        <button class="opt">因为 Spring 禁止在 Controller 里 try-catch</button>
+        <button class="opt">因为 Result 类会自动捕获异常</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="3">
+      <div class="stem">3. 第 5 课里 <code>Result&lt;Void&gt;</code> 的 <code>Void</code> 是什么？</div>
+      <div class="opts">
+        <button class="opt">一种 HTTP 状态码</button>
+        <button class="opt">Java 的关键字，表示"无返回值"</button>
+        <button class="opt">Mapper 的返回类型</button>
+        <button class="opt">泛型的"无数据"占位类，唯一值 null（区别于小写 void 关键字）</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+  </div>
+
+  <h2>一、问题：脏数据直接进库 / 列表一次全返回</h2>
+  <div class="layer-grid">
+    <div class="layer-card">
+      <h3>脏数据畅通无阻</h3>
+      <p class="ann">现在的 create 接口</p>
+      <p><code>create(@RequestBody User user)</code> 直接把客户端 JSON 收成实体。<br>
+      客户端发 <code>{"name":"","age":-5,"email":"哈哈","money":null}</code> 也能进库——没有任何一道门。</p>
+    </div>
+    <div class="layer-card">
+      <h3>列表不分页</h3>
+      <p class="ann">现在的 findAll 接口</p>
+      <p><code>findAll()</code> 一把返回全部用户。<br>
+      用户几千条时，SQL 扫整表、JSON 巨大，既拖慢接口又浪费带宽。真实项目几乎必须分页。</p>
+    </div>
+  </div>
+  <div class="callout">
+    <b>痛点一句话：</b>入口不校验 → 脏数据污染数据库；列表不分页 → 接口又慢又臃肿。两件事都让"能用"的 CRUD 离"完整"还差一步。
+  </div>
+
+  <h2>二、Bean Validation：用注解在入口挡脏数据</h2>
+  <p>JSR-380 是一套"声明式校验"标准，<b>Hibernate Validator</b> 是它的参考实现。规则写在 DTO 字段上，Spring 在把 JSON 绑成对象时<b>自动帮你查</b>，不必手写 if 判断。</p>
+  <div class="clarify">
+    <h3>🔧 先加依赖（⚠️ 重要）</h3>
+    <p>Spring Boot 3 起，校验<b>不再是</b> <code>spring-boot-starter-web</code> 的默认包含项，要单独引：</p>
+    <div class="codeblock"><span class="c">&lt;!-- 加在 pom.xml 的 &lt;dependencies&gt; 里 --&gt;</span>
+<span class="k">&lt;dependency&gt;</span>
+    <span class="k">&lt;groupId&gt;</span>org.springframework.boot<span class="k">&lt;/groupId&gt;</span>
+    <span class="k">&lt;artifactId&gt;</span>spring-boot-starter-validation<span class="k">&lt;/artifactId&gt;</span>
+<span class="k">&lt;/dependency&gt;</span></div>
+    <p>（你的 <code>_01</code> 现在没这个依赖，不引的话 <code>@Valid</code> 不生效、也不报错——这是最常见的"校验没反应"原因。）</p>
+  </div>
+
+  <p>校验要标在<b>入参专用 DTO</b> 上，<b>不要标在实体 <code>User</code> 上</b>——实体还用于"查库回填"，给查出来的对象也加校验会互相打架。新建一个 <code>UserCreateRequest</code>：</p>
+
+  <div class="codeblock"><span class="k">@Data</span>
+<span class="k">public class</span> <span class="t">UserCreateRequest</span> {
+    <span class="a">@NotBlank</span>(message = <span class="m">"姓名不能为空"</span>)        <span class="c">// String 非空且去空格后非空白</span>
+    <span class="a">@Size</span>(max = 20, message = <span class="m">"姓名最多 20 字"</span>)
+    <span class="k">private</span> String name;
+
+    <span class="a">@Min</span>(value = 0,  message = <span class="m">"年龄不能小于 0"</span>)
+    <span class="a">@Max</span>(value = 150, message = <span class="m">"年龄不能超过 150"</span>)
+    <span class="k">private</span> Integer age;
+
+    <span class="a">@Email</span>(message = <span class="m">"邮箱格式不正确"</span>)          <span class="c">// 内置格式校验</span>
+    <span class="k">private</span> String email;
+
+    <span class="a">@NotNull</span>(message = <span class="m">"余额不能为空"</span>)          <span class="c">// 对象非 null（区别于 @NotBlank 仅限 String）</span>
+    <span class="a">@Min</span>(value = 0, message = <span class="m">"余额不能为负"</span>)
+    <span class="k">private</span> Integer money;
+}</div>
+
+  <div class="clarify">
+    <h3>🔧 常用注解对照</h3>
+    <ol>
+      <li class="q-line"><code>@NotNull</code>：任意类型 ≠ null（<code>Integer money</code> 没传就是 null）。</li>
+      <li class="q-line"><code>@NotBlank</code>：仅 String，≠ null 且 <code>trim()</code> 后长度 &gt; 0（最常用在 name）。</li>
+      <li class="q-line"><code>@Size(min,max)</code>：String/集合的长度范围。</li>
+      <li class="q-line"><code>@Min / @Max</code>：数值上下界。</li>
+      <li class="q-line"><code>@Email</code> / <code>@Pattern(regexp=...)</code>：格式校验。</li>
+    </ol>
+    <p><b>关键：</b>光在 DTO 标注解不够，<b>必须在 Controller 参数前加 <code>@Valid</code></b> 才会真正触发。漏了 <code>@Valid</code> 是第二大坑。</p>
+  </div>
+
+  <p>Controller 改造：把 <code>@RequestBody User</code> 换成 <code>@Valid @RequestBody UserCreateRequest</code>，再拷进实体落库：</p>
+  <div class="codeblock"><span class="c">// 改前</span>
+<span class="k">public</span> <span class="t">Result</span>&lt;User&gt; <span class="m">create</span>(<span class="a">@RequestBody</span> User user) { ... }
+
+<span class="c">// 改后：@Valid 触发校验</span>
+<span class="a">@PostMapping</span>
+<span class="k">public</span> <span class="t">Result</span>&lt;User&gt; <span class="m">create</span>(<span class="a">@Valid</span> <span class="a">@RequestBody</span> <span class="t">UserCreateRequest</span> req) {
+    <span class="t">User</span> u = <span class="k">new</span> <span class="t">User</span>();
+    org.springframework.beans.BeanUtils.<span class="m">copyProperties</span>(req, u); <span class="c">// DTO → 实体</span>
+    <span class="k">return</span> <span class="t">Result</span>.<span class="m">success</span>(userService.create(u));
+}</div>
+
+  <h2>三、把校验失败接进全局异常（呼应第 5 课）</h2>
+  <p>校验没过时 Spring 抛出 <code>MethodArgumentNotValidException</code>。这正是第 5 课全局异常处理的用武之地——<b>不用在 Controller 里 try-catch</b>，在 <code>GlobalExceptionHandler</code> 加一个更具体的处理器即可（越具体越优先，排在 <code>Exception.class</code> 之前）：</p>
+  <div class="codeblock"><span class="a">@ExceptionHandler</span>(<span class="t">MethodArgumentNotValidException</span>.<span class="k">class</span>)  <span class="c">// 比 Exception.class 更具体，优先匹配</span>
+<span class="k">public</span> <span class="t">Result</span>&lt;Void&gt; <span class="m">handleValid</span>(<span class="t">MethodArgumentNotValidException</span> e) {
+    String msg = e.<span class="m">getBindingResult</span>().<span class="m">getFieldErrors</span>().stream()
+        .<span class="m">map</span>(f -&gt; f.<span class="m">getField</span>() + <span class="m">": "</span> + f.<span class="m">getDefaultMessage</span>())
+        .<span class="m">collect</span>(java.util.stream.Collectors.<span class="m">joining</span>(<span class="m">"; "</span>));
+    <span class="k">return</span> <span class="t">Result</span>.<span class="m">error</span>(400, msg);   <span class="c">// 业务码 400 = 参数错误</span>
+}</div>
+  <div class="callout good">
+    <b>🔍 现在客户端发 <code>name:""</code>，接口返回：</b><br>
+    <code>{"code":400, "msg":"name: 姓名不能为空", "data":null}</code><br>
+    和成功时、和其他异常<b>完全是同一个 Result 结构</b>。这正是第 5 课"统一结构"的回报——前端不用为校验失败写任何特殊分支。
+  </div>
+
+  <h2>四、分页：LIMIT/OFFSET + COUNT（最贴合 MyBatis）</h2>
+  <p>分页本质就是两句话：① 只查"当前这一页"的数据；② 再查"总共多少条"好让前端算总页数。手写最透明、零黑盒，最贴合你现在的 MyBatis 栈。</p>
+  <div class="codeblock"><span class="c">// Mapper：两条 SQL</span>
+<span class="a">@Select</span>(<span class="m">"SELECT * FROM user LIMIT #{size} OFFSET #{offset}"</span>)
+<span class="t">List</span>&lt;User&gt; <span class="m">findByPage</span>(<span class="a">@Param</span>(<span class="m">"size"</span>) <span class="k">int</span> size, <span class="a">@Param</span>(<span class="m">"offset"</span>) <span class="k">int</span> offset);
+
+<span class="a">@Select</span>(<span class="m">"SELECT COUNT(*) FROM user"</span>)
+<span class="k">int</span> <span class="m">countAll</span>();</div>
+  <p><b>offset 怎么算？</b> 第 <code>page</code> 页、每页 <code>size</code> 条 → <code>offset = (page - 1) * size</code>。例：第 2 页、size=10 → 跳过前 10 条，取接下来的 10 条。</p>
+
+  <p>再定义一个页结构，把"数据 + 总数"打包（照样包进 <code>Result</code>）：</p>
+  <div class="codeblock"><span class="k">@Data</span>
+<span class="k">public class</span> <span class="t">PageResult</span>&lt;T&gt; {
+    <span class="k">private</span> <span class="t">List</span>&lt;T&gt; list;   <span class="c">// 当前页数据</span>
+    <span class="k">private</span> <span class="k">long</span> total;      <span class="c">// 总条数（算总页数用）</span>
+    <span class="k">private</span> <span class="k">int</span>  page;       <span class="c">// 当前页</span>
+    <span class="k">private</span> <span class="k">int</span>  size;       <span class="c">// 每页条数</span>
+}</div>
+  <p>Service 组装、Controller 用 <code>@RequestParam</code> 收页码（带默认值，不传也能用）：</p>
+  <div class="codeblock"><span class="c">// Controller</span>
+<span class="a">@GetMapping</span>
+<span class="k">public</span> <span class="t">Result</span>&lt;<span class="t">PageResult</span>&lt;User&gt;&gt; <span class="m">findAll</span>(
+        <span class="a">@RequestParam</span>(defaultValue = <span class="m">"1"</span>) <span class="k">int</span> page,
+        <span class="a">@RequestParam</span>(defaultValue = <span class="m">"10"</span>) <span class="k">int</span> size) {
+    <span class="k">return</span> <span class="t">Result</span>.<span class="m">success</span>(userService.findPage(page, size));
+}
+
+<span class="c">// Service</span>
+<span class="k">public</span> <span class="t">PageResult</span>&lt;User&gt; <span class="m">findPage</span>(<span class="k">int</span> page, <span class="k">int</span> size) {
+    <span class="k">int</span> offset = (page - 1) * size;
+    <span class="t">List</span>&lt;User&gt; list = userMapper.<span class="m">findByPage</span>(size, offset);
+    <span class="k">long</span> total = userMapper.<span class="m">countAll</span>();
+    <span class="k">return</span> <span class="k">new</span> <span class="t">PageResult</span>&lt;&gt;(list, total, page, size);
+}</div>
+  <div class="clarify">
+    <h3>🔧 进阶替代：PageHelper</h3>
+    <p>MyBatis 有个拦截器 <code>PageHelper</code>，一行 <code>PageHelper.startPage(page, size)</code> 就能自动给<b>紧接着的那条查询</b>拼上 LIMIT。好处是 Mapper 不用改 SQL；坏处是"靠线程上下文偷偷改 SQL"的黑盒，调试时不直观。<b>教学阶段建议先手写</b>，把 LIMIT/OFFSET 想明白，再了解 PageHelper 不迟。</p>
+  </div>
+
+  <h2>五、在 _01 里动手（可选 · 进阶）</h2>
+  <ol>
+    <li><b>引依赖：</b>在 <code>pom.xml</code> 加 <code>spring-boot-starter-validation</code>（否则 <code>@Valid</code> 静默失效）。</li>
+    <li><b>建 DTO：</b><code>dto/UserCreateRequest.java</code>，字段标 <code>@NotBlank/@Size/@Min/@Email</code> 等。</li>
+    <li><b>改 Controller：</b><code>create</code> 用 <code>@Valid @RequestBody UserCreateRequest</code>，拷贝进 <code>User</code> 再落库。</li>
+    <li><b>接异常：</b>在 <code>GlobalExceptionHandler</code> 加 <code>@ExceptionHandler(MethodArgumentNotValidException.class)</code> → <code>Result.error(400, 字段错误)</code>。</li>
+    <li><b>加分页：</b>Mapper 加 <code>findByPage</code> + <code>countAll</code>；建 <code>common/PageResult.java</code>；Service 组装；<code>findAll</code> 改成收 <code>page/size</code> 返回 <code>Result&lt;PageResult&lt;User&gt;&gt;</code>。</li>
+    <li><b>重启验证：</b><code>POST /users</code> 发 <code>{"name":""}</code> 看返回 <code>code:400</code>；<code>GET /users?page=1&size=2</code> 看返回的 <code>list/total/page/size</code>。</li>
+  </ol>
+  <div class="callout">
+    <b>📌 和前两课一样：</b>校验与分页是"生产级规范"，不是 CRUD 的必需功能。你现在的接口"能用"，只是不够严谨。本课是让你知道<b>一套完整 CRUD 还差哪两块拼图</b>。不强制改现有代码。
+  </div>
+
+  <h2>六、本课小测（新知识，合上笔记答）</h2>
+  <div class="quiz" id="newquiz">
+    <div class="q" data-ans="0">
+      <div class="stem">4. 在 DTO 字段标了 <code>@NotBlank</code>，还需要在 Controller 参数前加什么才会真正触发校验？</div>
+      <div class="opts">
+        <button class="opt">@Valid</button>
+        <button class="opt">@Check</button>
+        <button class="opt">@RequestBody</button>
+        <button class="opt">什么都不用加，标了就生效</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="3">
+      <div class="stem">5. 客户端发来的 JSON 里 <code>name</code> 为空、DTO 标了 <code>@NotBlank</code>，Spring 会抛出什么、最终前端拿到什么？</div>
+      <div class="opts">
+        <button class="opt">返回 HTTP 500 且 data 为 null</button>
+        <button class="opt">静默忽略，照常入库</button>
+        <button class="opt">返回成功、只是 name 存成空串</button>
+        <button class="opt">抛 MethodArgumentNotValidException，被全局处理成 Result.error(400, 字段错误)</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="1">
+      <div class="stem">6. 手写分页时，除了"当前页数据"那句 SQL，通常还要再发一条什么？</div>
+      <div class="opts">
+        <button class="opt">SELECT MAX(id) 查最大 id</button>
+        <button class="opt">SELECT COUNT(*) 查总条数（算总页数用）</button>
+        <button class="opt">再查一次整表</button>
+        <button class="opt">不需要，前端自己数</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="2">
+      <div class="stem">7. 第 2 页、每页 10 条，SQL 的 OFFSET 应该是多少？</div>
+      <div class="opts">
+        <button class="opt">2</button>
+        <button class="opt">10</button>
+        <button class="opt">10（即 (2-1)*10）</button>
+        <button class="opt">20</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+  </div>
+
+  <h2>七、想深挖时，回看这些笔记</h2>
+  <div class="sources">
+    📚 你的 ima 一手资料（在《Java后端课程资料》知识库）：
+    <ul>
+      <li>参数校验（Bean Validation）.md —— @NotNull/@NotBlank/@Valid 用法与全局捕获</li>
+      <li>分页查询.md —— MyBatis 分页（LIMIT/OFFSET 与 PageHelper）</li>
+      <li>统一返回结果封装.md —— 第 5 课，本课的 Result/全局异常基础</li>
+    </ul>
+    🔗 外部权威：
+    <ul>
+      <li><a href="https://docs.spring.io/spring-framework/reference/core/validation/beanvalidation.html">Spring 官方 · Bean Validation</a></li>
+      <li><a href="https://www.baeldung.com/javax-validation">Baeldung · Validation in Spring</a></li>
+    </ul>
+  </div>
+
+  <div class="callout good">
+    <b>🤝 我是你的老师。</b>任何一处没懂（比如「@NotNull 和 @NotBlank 到底差在哪」「PageHelper 怎么接」），直接追问我。别带着疑惑结束这一课。
+  </div>
+
+  <footer>
+    🎉 至此 6 课全部讲完：① 请求生命周期 → ② IoC/DI 骨架 → ③ MyBatis CRUD → ④ 数据源/连接池/事务 → ⑤ 统一返回/全局异常 → ⑥ 输入校验/分页。你已经能<b>独立写出一套结构统一、异常可控、入口严谨、列表分页的完整 CRUD</b>。下一步建议：挑一张自己的表，从零写一遍全流程，当作结课作业。
+  </footer>
+
+</main>
+
+<script>
+  const explain = [
+    '✓ 正确：第 5 课的统一返回体是 Result<T>，三字段 code（业务码）/ msg（提示）/ data（业务数据）。它让所有接口成功失败都长一样。',
+    '✓ 正确：异常会从 Service 冒泡到框架层，@RestControllerAdvice 里的 @ExceptionHandler 一处兜住所有 Controller 的异常，省去每接口重复 try-catch，且成功失败都包成同一个 Result 结构。',
+    '✓ 正确：Void 是 java.lang 的一个类（泛型"无数据"占位），唯一值是 null；和小写 void 关键字（表示方法不返回）完全不同。Result<Void> 表示"这个接口成功时也没数据可带"。',
+    '✓ 正确：@Valid 才是"开关"——它告诉 Spring "对这个参数做校验"。只标 DTO 注解、忘加 @Valid，校验不会触发，这是最常见的坑。',
+    '✓ 正确：校验失败 Spring 抛 MethodArgumentNotValidException，被第 5 课的全局异常处理器接住，转成 Result.error(400, "name: 姓名不能为空")，和成功结构一致。',
+    '✓ 正确：分页要两样东西——当前页数据 + 总条数。总条数靠 SELECT COUNT(*) 得到，前端用它算总页数（total/size 向上取整）。',
+    '✓ 正确：OFFSET = (page-1)*size。第 2 页、size=10 → (2-1)*10 = 10，即跳过前 10 条、从第 11 条开始取。'
+  ];
+  document.querySelectorAll('.q').forEach((q, qi) => {
+    const ans = +q.dataset.ans;
+    const opts = q.querySelectorAll('.opt');
+    const fb = q.querySelector('.feedback');
+    opts.forEach((btn, i) => {
+      btn.addEventListener('click', () => {
+        opts.forEach(o => o.disabled = true);
+        if (i === ans) {
+          btn.classList.add('correct');
+          fb.textContent = explain[qi];
+          fb.classList.add('ok');
+        } else {
+          btn.classList.add('wrong');
+          opts[ans].classList.add('correct');
+          fb.textContent = '✗ 再想想：' + explain[qi].replace('✓ 正确：', '');
+          fb.classList.add('no');
+        }
+      });
+    });
+  });
+</script>
+</body>
+</html>

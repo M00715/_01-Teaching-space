@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 7 课 · MyBatis 动态 SQL</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<main class="lesson">
+
+  <h1>MyBatis 动态 SQL</h1>
+  <p class="subtitle">Spring Boot CRUD 复习 · 第 7 课（加餐）· 预计 20 分钟</p>
+
+  <div class="mission">
+    🎯 本课服务于 <b>MISSION.md</b>：前 6 课你已经能写出"结构统一、异常可控、入口有校验、列表能分页"的完整 CRUD。但有个现实短板——你现在的 SQL 全是<b>写死的</b>：<code>findByNameLike</code> 只能按名字模糊查，想"按名字 + 年龄区间 + 分页"组合就抓瞎；<code>deleteByIds</code> 批量删除用注解拼也很别扭。本课学 <b>MyBatis 动态 SQL</b>（<code>&lt;if&gt;</code>/<code>&lt;where&gt;</code>/<code>&lt;foreach&gt;</code>/<code>&lt;set&gt;</code>），让一条 SQL 能"<b>按传了什么参数就拼什么</b>"，这是 MyBatis 最核心的卖点，也是 CRUD 灵活性的关键一步。比拦截器/AOP 直观得多，完全不必担心晦涩。
+  </div>
+
+  <h2>🧠 先回忆第六课（合上笔记答 3 题）</h2>
+  <p>间隔检索最能留住记忆。把第 6 课的核心从脑子里"捞"出来，再进新课。点选项立刻看对错。</p>
+  <div class="quiz" id="recall">
+    <div class="q" data-ans="0">
+      <div class="stem">1. 在 DTO 字段标了 <code>@NotBlank</code> 等校验注解后，还必须在 Controller 参数前加什么才会真正触发校验？</div>
+      <div class="opts">
+        <button class="opt">@Valid</button>
+        <button class="opt">@Check</button>
+        <button class="opt">@RequestBody</button>
+        <button class="opt">什么都不用加，标了就生效</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="3">
+      <div class="stem">2. 客户端发来的 JSON 里 <code>name</code> 为空、DTO 标了 <code>@NotBlank</code>，Spring 会抛出什么、最终前端拿到什么？</div>
+      <div class="opts">
+        <button class="opt">返回 HTTP 500 且 data 为 null</button>
+        <button class="opt">静默忽略，照常入库</button>
+        <button class="opt">返回成功、只是 name 存成空串</button>
+        <button class="opt">抛 MethodArgumentNotValidException，被全局处理成 Result.error(400, 字段错误)</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="1">
+      <div class="stem">3. 手写分页时，为什么除了"当前页数据"那条 SQL，还要再发一条 <code>SELECT COUNT(*)</code>？</div>
+      <div class="opts">
+        <button class="opt">LIMIT/OFFSET 本身返回总数，多查一次是为了保险</button>
+        <button class="opt">LIMIT/OFFSET 只取当页、永远不给总数；COUNT(*) 拿总数好让前端算总页数</button>
+        <button class="opt">为了查最大 id</button>
+        <button class="opt">不需要，前端自己数</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+  </div>
+
+  <h2>一、问题：写死的 SQL 不灵活</h2>
+  <div class="layer-grid">
+    <div class="layer-card">
+      <h3>条件查询僵化</h3>
+      <p class="ann">现在的 findByNameLike</p>
+      <p><code>@Select("SELECT * FROM user WHERE name LIKE ...")</code><br>
+      只能按名字查。想加"年龄区间""邮箱模糊"就得再写新接口，SQL 越写越多、越来越像复制粘贴。</p>
+    </div>
+    <div class="layer-card">
+      <h3>批量操作别扭</h3>
+      <p class="ann">现在的 deleteByIds</p>
+      <p>想 <code>DELETE ... WHERE id IN (1,2,3)</code>，用注解拼 <code>IN</code> 列表很麻烦，容易写成字符串拼接（还有 SQL 注入风险）。</p>
+    </div>
+  </div>
+  <div class="callout">
+    <b>痛点一句话：</b>真实的查询几乎都是"<b>可选条件组合</b>"——传了 name 就按 name 查、传了年龄就加年龄、都没传就查全部。写死的 SQL 做不到，<b>动态 SQL 就是为此而生</b>。
+  </div>
+
+  <h2>二、从注解 @Select 到 XML 映射文件</h2>
+  <p>你之前一直用 <code>@Select("...")</code> 注解写 SQL——它适合<b>短、固定</b>的 SQL。一旦 SQL 要"根据参数动态拼"，注解里塞一堆 <code>&lt;if&gt;</code> 会非常难看，这时要用 <b>XML 映射文件</b>。</p>
+  <div class="clarify">
+    <h3>🔧 XML 文件长什么样</h3>
+    <div class="codeblock"><span class="c">&lt;!-- resources/mapper/UserMapper.xml --&gt;</span>
+<span class="k">&lt;?xml version="1.0" encoding="UTF-8"?&gt;</span>
+<span class="k">&lt;!DOCTYPE</span> mapper <span class="k">PUBLIC</span> <span class="m">"-//mybatis.org//DTD Mapper 3.0//EN"</span>
+  <span class="m">"http://mybatis.org/dtd/mybatis-3-mapper.dtd"</span><span class="k">&gt;</span>
+<span class="k">&lt;mapper</span> <span class="a">namespace</span>=<span class="m">"learn.springboot.mapper.UserMapper"</span><span class="k">&gt;</span>
+    <span class="c">&lt;!-- id 必须和接口方法名一致 --&gt;</span>
+    <span class="k">&lt;select</span> <span class="a">id</span>=<span class="m">"findByCondition"</span> <span class="a">resultType</span>=<span class="m">"learn.springboot.entity.User"</span><span class="k">&gt;</span>
+        SELECT * FROM user
+        <span class="k">&lt;where&gt;</span>
+            <span class="k">&lt;if</span> <span class="a">test</span>=<span class="m">"name != null and name != ''"</span><span class="k">&gt;</span>
+                AND name LIKE CONCAT('%', #{name}, '%')
+            <span class="k">&lt;/if&gt;</span>
+            <span class="k">&lt;if</span> <span class="a">test</span>=<span class="m">"ageMin != null"</span><span class="k">&gt;</span>
+                AND age &gt;= #{ageMin}
+            <span class="k">&lt;/if&gt;</span>
+        <span class="k">&lt;/where&gt;</span>
+    <span class="k">&lt;/select&gt;</span>
+<span class="k">&lt;/mapper&gt;</span></div>
+    <p><b>三个对应点：</b>① <code>namespace</code> = Mapper 接口全限定名；② <code>&lt;select id="..."&gt;</code> 的 id = 接口方法名；③ <code>resultType</code> = 返回的行映射成的类。接口里写方法签名，SQL 写在 XML，MyBatis 按 id 把两者绑起来。</p>
+  </div>
+  <div class="clarify">
+    <h3>🔧 还要告诉 MyBatis 去哪找 XML</h3>
+    <p>在 <code>application.yml</code> 加（若还没有）：</p>
+    <div class="codeblock">mybatis:
+  mapper-locations: classpath:mapper/*.xml</div>
+    <p>（你之前的 SQL 全在注解里，所以一直没配这个。改用 XML 后必须配，否则 MyBatis 找不到 XML 里的 SQL。）</p>
+  </div>
+
+  <h2>三、&lt;if&gt; + &lt;where&gt;：条件"按需拼接"</h2>
+  <p>这是动态 SQL 的主力。<code>&lt;if test="..."&gt;</code> 里的 <code>test</code> 是 OGNL 表达式（很像 Java 的判断），<b>条件为真才把这段 SQL 拼进去</b>。</p>
+  <div class="codeblock"><span class="c">// Mapper 接口：参数用 Map 或专用 DTO 都行</span>
+<span class="k">List</span>&lt;User&gt; <span class="m">findByCondition</span>(<span class="a">@Param</span>(<span class="m">"name"</span>) String name,
+                       <span class="a">@Param</span>(<span class="m">"ageMin"</span>) Integer ageMin);</div>
+  <p><b><code>&lt;where&gt;</code> 的智能之处：</b>它会自动<b>去掉首个被拼进去的条件前面的 AND/OR</b>。上面例子里，若只传了 <code>ageMin</code>，拼出来是 <code>WHERE age &gt;= ?</code>（前面那个 AND 被吃掉了）；若啥都没传，<code>&lt;where&gt;</code> 整体不生成，变成 <code>SELECT * FROM user</code> 查全部。你不用手动判断"该不该加 AND"。</p>
+  <div class="callout good">
+    <b>🔍 对比写死 SQL：</b>以前要写 <code>findByName</code>、<code>findByAge</code>、<code>findAll</code> 三个接口；现在<b>一个 <code>findByCondition</code> 全包</b>，传什么查什么。
+  </div>
+
+  <h2>四、&lt;foreach&gt;：批量操作的利器</h2>
+  <p>遍历一个集合，拼成 <code>(1,2,3)</code> 这种形式。最经典的用法就是"按 id 列表批量删除/查询"。</p>
+  <div class="codeblock"><span class="c">&lt;!-- 批量删除：DELETE FROM user WHERE id IN (1,2,3) --&gt;</span>
+<span class="k">&lt;delete</span> <span class="a">id</span>=<span class="m">"deleteByIds"</span><span class="k">&gt;</span>
+    DELETE FROM user WHERE id IN (
+    <span class="k">&lt;foreach</span> <span class="a">collection</span>=<span class="m">"ids"</span> <span class="a">item</span>=<span class="m">"id"</span>
+             <span class="a">open</span>=<span class="m">"("</span> <span class="a">close</span>=<span class="m">")"</span> <span class="a">separator</span>=<span class="m">","</span><span class="k">&gt;</span>
+        #{id}
+    <span class="k">&lt;/foreach&gt;</span>
+    )
+<span class="k">&lt;/delete&gt;</span></div>
+  <p><code>collection</code> = 集合参数名（用了 <code>@Param("ids")</code> 就写 <code>"ids"</code>）；<code>item</code> = 遍历出的单个元素名；<code>open/close</code> = 首尾包裹符；<code>separator</code> = 元素间分隔符。最终拼成 <code>IN (1,2,3)</code>。<b>用 <code>#{}</code> 占位，MyBatis 会预编译，天然防 SQL 注入</b>——比自己拼字符串安全太多。</p>
+
+  <h2>五、&lt;set&gt;：动态更新，避免把没传的字段置 NULL</h2>
+  <p>改用户资料时，客户端往往只传"要改的字段"。用 <code>&lt;set&gt;</code> 只更新传了的字段，没传的保持原值，不会手滑把 <code>email</code> 设成 NULL。</p>
+  <div class="codeblock"><span class="k">&lt;update</span> <span class="a">id</span>=<span class="m">"updateSelective"</span><span class="k">&gt;</span>
+    UPDATE user
+    <span class="k">&lt;set&gt;</span>
+        <span class="k">&lt;if</span> <span class="a">test</span>=<span class="m">"name != null"</span><span class="k">&gt;</span>name = #{name},<span class="k">&lt;/if&gt;</span>
+        <span class="k">&lt;if</span> <span class="a">test</span>=<span class="m">"age != null"</span><span class="k">&gt;</span>age = #{age},<span class="k">&lt;/if&gt;</span>
+        <span class="k">&lt;if</span> <span class="a">test</span>=<span class="m">"email != null"</span><span class="k">&gt;</span>email = #{email},<span class="k">&lt;/if&gt;</span>
+    <span class="k">&lt;/set&gt;</span>
+    WHERE id = #{id}
+<span class="k">&lt;/update&gt;</span></div>
+  <p><code>&lt;set&gt;</code> 会自动剔除末尾多余的逗号（比如只改 name，生成 <code>SET name = ?</code> 而不带尾逗号）。这正好呼应第 6 课"update 用 DTO、字段可空"的设计——哪些字段要改，由前端传不传决定。</p>
+
+  <h2>六、在 _01 里动手（可选 · 进阶）</h2>
+  <ol>
+    <li><b>配 XML 路径：</b><code>application.yml</code> 加 <code>mybatis.mapper-locations: classpath:mapper/*.xml</code>。</li>
+    <li><b>建 XML：</b><code>resources/mapper/UserMapper.xml</code>，<code>namespace</code> 指向现有 <code>UserMapper</code> 接口。</li>
+    <li><b>搬 SQL：</b>把 <code>findByNameLike</code> 改写成 <code>&lt;if&gt;+&lt;where&gt;</code> 的条件查询；把 <code>deleteByIds</code> 改写成 <code>&lt;foreach&gt;</code> 版本。</li>
+    <li><b>接口签名：</b>条件查询方法加 <code>@Param</code>；批量删除参数改为 <code>@Param("ids") List&lt;Long&gt; ids</code>。</li>
+    <li><b>重启验证：</b><code>GET /users?name=张</code> 按名查；<code>POST /users/batch</code> 传 <code>[1,2,3]</code> 看批量删除是否只删这三条。</li>
+  </ol>
+  <div class="callout">
+    <b>📌 提醒：</b>动态 SQL 本质是"把你已经会的条件判断，从 Java 代码搬到 XML 里用标签表达"。它不难，关键是记住四个标签各管什么：<code>&lt;if&gt;</code> 判断、<code>&lt;where&gt;</code> 智能去 AND、<code>&lt;foreach&gt;</code> 遍历集合、<code>&lt;set&gt;</code> 智能去逗号。
+  </div>
+
+  <h2>七、本课小测（新知识，合上笔记答）</h2>
+  <div class="quiz" id="newquiz">
+    <div class="q" data-ans="2">
+      <div class="stem">4. 什么情况下应该从 <code>@Select</code> 注解改用 XML 映射文件写 SQL？</div>
+      <div class="opts">
+        <button class="opt">SQL 超过一行就必须用 XML</button>
+        <button class="opt">XML 永远比注解快</button>
+        <button class="opt">SQL 需要根据参数动态拼接（用 &lt;if&gt;/&lt;foreach&gt; 等）时</button>
+        <button class="opt">注解方式不支持 SELECT</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="1">
+      <div class="stem">5. <code>&lt;where&gt;</code> 标签主要帮你解决什么麻烦？</div>
+      <div class="opts">
+        <button class="opt">自动给 SQL 加 LIMIT 分页</button>
+        <button class="opt">自动去掉首个被拼入条件前面的 AND/OR，避免语法错误</button>
+        <button class="opt">自动把参数转成大写</button>
+        <button class="opt">自动创建表</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="3">
+      <div class="stem">6. <code>&lt;foreach&gt;</code> 最常见的用途是？</div>
+      <div class="opts">
+        <button class="opt">遍历生成一个字符串做日志</button>
+        <button class="opt">循环调用接口</button>
+        <button class="opt">做 if 判断</button>
+        <button class="opt">把集合拼成 IN (1,2,3) 做批量查询/删除</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+    <div class="q" data-ans="0">
+      <div class="stem">7. 动态更新用户资料时，用哪个标签可以"只更新传了的字段、并自动去掉末尾多余逗号"？</div>
+      <div class="opts">
+        <button class="opt">&lt;set&gt;</button>
+        <button class="opt">&lt;where&gt;</button>
+        <button class="opt">&lt;trim&gt;</button>
+        <button class="opt">&lt;choose&gt;</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+  </div>
+
+  <h2>八、想深挖时，回看这些笔记</h2>
+  <div class="sources">
+    📚 你的 ima 一手资料（在《Java后端课程资料》知识库）：
+    <ul>
+      <li>MyBatis 动态 SQL.md —— &lt;if&gt;/&lt;where&gt;/&lt;foreach&gt;/&lt;set&gt; 完整示例</li>
+      <li>MyBatis XML 映射.md —— namespace / resultType / mapper-locations 配置</li>
+      <li>MyBatis CRUD.md —— 第 3 课，本课 XML 写法的接口基础</li>
+    </ul>
+    🔗 外部权威：
+    <ul>
+      <li><a href="https://mybatis.org/mybatis-3/dynamic-sql.html">MyBatis 官方 · Dynamic SQL</a></li>
+      <li><a href="https://www.baeldung.com/mybatis-dynamic-sql">Baeldung · MyBatis Dynamic SQL</a></li>
+    </ul>
+  </div>
+
+  <div class="callout good">
+    <b>🤝 我是你的老师。</b>任何一处没懂（比如「OGNL 的 test 表达式怎么写」「XML 和注解能不能混用」），直接追问我。别带着疑惑结束这一课。
+  </div>
+
+  <footer>
+    🎓 第 7 课（加餐）把 CRUD 从"写死 SQL"升级到"按需拼 SQL"。至此你的工具箱：统一返回 / 全局异常 / 校验 / 分页 / 动态 SQL 都已就位。下一课可延伸方向（待你定）：① 多表关联查询（一对一 / 一对多 resultMap）；② 日志与排错（SLF4J + 定位报错层级）；③ AOP 入门（把日志/耗时统计横切到所有接口）。晚上来选。
+  </footer>
+
+</main>
+
+<script>
+  const explain = [
+    '✓ 正确：@Valid 才是"开关"——它告诉 Spring "对这个参数做校验"。只标 DTO 注解、忘加 @Valid，校验不会触发。',
+    '✓ 正确：校验失败 Spring 抛 MethodArgumentNotValidException，被第 5 课的全局异常处理器接住，转成 Result.error(400, "name: 姓名不能为空")，和成功结构一致。',
+    '✓ 正确：分页要两样东西——当前页数据 + 总条数。LIMIT/OFFSET 只取当页、永远不给总数，COUNT(*) 拿总数好让前端算总页数。',
+    '✓ 正确：当 SQL 要根据传入参数动态拼接（用 <if>/<foreach> 等标签）时，注解里塞这些会很难看，改用 XML 映射文件是正道。固定短 SQL 仍可用 @Select。',
+    '✓ 正确：<where> 会自动剔除首个被拼入条件前面的 AND/OR。比如只传 ageMin 时生成 "WHERE age>=?"，不会变成 "WHERE AND age>=?" 这种语法错误。',
+    '✓ 正确：<foreach> 用来遍历集合，拼成 IN (1,2,3) 形式，是批量查询、批量删除、批量插入的主力标签；配合 #{} 预编译还能防 SQL 注入。',
+    '✓ 正确：<set> 用于动态 UPDATE，只拼入传了的字段，并自动去掉末尾多余的逗号，避免把没传的字段误置为 NULL。'
+  ];
+  document.querySelectorAll('.q').forEach((q, qi) => {
+    const ans = +q.dataset.ans;
+    const opts = q.querySelectorAll('.opt');
+    const fb = q.querySelector('.feedback');
+    opts.forEach((btn, i) => {
+      btn.addEventListener('click', () => {
+        opts.forEach(o => o.disabled = true);
+        if (i === ans) {
+          btn.classList.add('correct');
+          fb.textContent = explain[qi];
+          fb.classList.add('ok');
+        } else {
+          btn.classList.add('wrong');
+          opts[ans].classList.add('correct');
+          fb.textContent = '✗ 再想想：' + explain[qi].replace('✓ 正确：', '');
+          fb.classList.add('no');
+        }
+      });
+    });
+  });
+</script>
+</body>
+</html>

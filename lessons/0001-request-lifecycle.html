@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 1 课 · 从浏览器到数据库：一次 CRUD 请求的生命周期</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<main class="lesson">
+
+  <h1>从浏览器到数据库：一次 CRUD 请求的生命周期</h1>
+  <p class="subtitle">Spring Boot CRUD 复习 · 第 1 课 / 共约 6 课 · 预计 20 分钟</p>
+
+  <div class="mission">
+    🎯 本课服务于 <b>MISSION.md</b>：能凭记忆口述「一次请求从浏览器到数据库的完整链路」。这是把 IoC / AOP / Mapper 等零散名词串成一张地图的第一块拼图。
+  </div>
+
+  <h2>一、先建立全景：一条请求怎么走完</h2>
+  <p>你以前记过一堆名词，但没把它们连成一条线。本课只做一件事：<b>把四个名词按「请求流动的顺序」排成一列</b>。记住这条线，后面每一课都是往这条线上挂细节。</p>
+
+  <div class="flow">
+    <div class="node"><div class="layer">浏览器</div><div class="tag">你/前端</div><div class="job">发起 HTTP 请求</div></div>
+    <div class="arrow">→</div>
+    <div class="node"><div class="layer">Controller</div><div class="tag">控制层</div><div class="job">接请求、收参数</div></div>
+    <div class="arrow">→</div>
+    <div class="node"><div class="layer">Service</div><div class="tag">业务层</div><div class="job">写业务逻辑</div></div>
+    <div class="arrow">→</div>
+    <div class="node"><div class="layer">Mapper</div><div class="tag">数据层</div><div class="job">拼 SQL、访数据库</div></div>
+    <div class="arrow">→</div>
+    <div class="node"><div class="layer">DB</div><div class="tag">SQLite</div><div class="job">真正存数据</div></div>
+  </div>
+  <p>返回时原路倒流：DB 给结果 → Mapper 转成 Java 对象 → Service 加工 → Controller 转成 JSON → 浏览器收到响应。整条链路就是「基础 CRUD」四个字拆开的全部含义。</p>
+
+  <h2>二、四个角色，各管一摊</h2>
+  <div class="layer-grid">
+    <div class="layer-card">
+      <h3>Controller 控制层</h3>
+      <p class="ann">注解：<code>@RestController</code></p>
+      <p>对外门面。负责「接住请求、读懂参数、返回 JSON」。不写业务，只做转发。</p>
+    </div>
+    <div class="layer-card">
+      <h3>Service 业务层</h3>
+      <p class="ann">注解：<code>@Service</code></p>
+      <p>真正干活的地方。增删改查的规则、校验、事务都在这里。</p>
+    </div>
+    <div class="layer-card">
+      <h3>Mapper 数据层</h3>
+      <p class="ann">注解：<code>@Mapper</code></p>
+      <p>MyBatis 的接口。一个方法对应一条 SQL，把 Java 对象和数据表互相映射。</p>
+    </div>
+    <div class="layer-card">
+      <h3>DB 数据库</h3>
+      <p class="ann">本项目：<code>SQLite</code></p>
+      <p>数据的归宿。你写的 SQL 最终在这里执行。MySQL 与 SQLite 的 CRUD 语句几乎一致。</p>
+    </div>
+  </div>
+
+  <div class="callout">
+    <b>💡 Aha：为什么这些名词能连起来？</b><br>
+    你记得 Spring 的 <b>IoC（控制反转）</b>吗？它的意思是：<u>这些对象不是你 <code>new</code> 出来的，而是 Spring 帮你创建好、再「注入」到需要用它的地方</u>。所以 Controller 里能直接用一个 Service，Service 里能直接用一个 Mapper——你从没手动实例化它们。正是 IoC 把这条链路上的四个角色「粘」在了一起。AOP 是另一回事（给方法统一加日志/事务），先记住 IoC 即可。
+  </div>
+
+  <div class="clarify">
+    <h3>🔧 澄清卡片 · 最容易混淆的两个点</h3>
+    <p class="q-line"><b>① 每一层的 <code>@Autowired</code> 到底装的是什么？</b></p>
+    <p>装配方向 <b>= 调用方向，逐层向下</b>：Controller 依赖 Service，Service 依赖 Mapper。谁调用谁，谁就注入谁。</p>
+    <div class="codeblock"><span class="k">@RestController</span>                      <span class="c">// ← 这是一个 Spring Bean</span>
+<span class="k">public class</span> <span class="t">UserController</span> {
+    <span class="a">@Autowired</span> <span class="k">private</span> <span class="t">UserService</span> userService;  <span class="c">// Controller 注入 Service（不是 Mapper）</span>
+
+    <span class="k">public</span> <span class="t">User</span> <span class="m">create</span>(<span class="t">User</span> user) {
+        <span class="k">return</span> userService.<span class="m">save</span>(user);  <span class="c">// 调 Service，自己不碰 DB</span>
+    }
+}
+
+<span class="k">@Service</span>                             <span class="c">// ← 这也是一个 Bean</span>
+<span class="k">public class</span> <span class="t">UserService</span> {
+    <span class="a">@Autowired</span> <span class="k">private</span> <span class="t">UserMapper</span> userMapper;  <span class="c">// Service 注入 Mapper 接口</span>
+
+    <span class="k">public</span> <span class="t">User</span> <span class="m">save</span>(<span class="t">User</span> user) {
+        userMapper.<span class="m">insert</span>(user);  <span class="c">// 调接口，MyBatis 去跑 SQL</span>
+        <span class="k">return</span> user;
+    }
+}
+
+<span class="k">@Mapper</span>                               <span class="c">// ← 接口本身 = Bean（MyBatis 生成代理并注册）</span>
+<span class="k">public interface</span> <span class="t">UserMapper</span> {
+    <span class="k">void</span> <span class="m">insert</span>(<span class="t">User</span> user);
+}</div>
+
+    <p class="q-line"><b>② 为什么 Controller 不直接 <code>@Autowired</code> Mapper？</b></p>
+    <ol>
+      <li>技术上能写、能跑，但<b>不该这么写</b>。分层的目的就是各管一段：Controller 管「接请求/回 JSON」，Service 管「业务/校验/事务」，Mapper 管「SQL」。Controller 越过 Service 直接调 Mapper，等于让门面去干数据访问的活，事务和校验就没地方放了。</li>
+      <li><b>严格分层下，Controller 只注入 Service。</b></li>
+      <li><code>@Autowired</code> 凭什么能把一个「接口」注入进来？靠 <code>@Mapper</code>（或启动类上的 <code>@MapperScan</code>）。MyBatis 启动时扫描这些接口，用<b>动态代理</b>生成实现类并注册成 Spring Bean——所以接口也能被注入。</li>
+    </ol>
+    <p style="margin:10px 0 0;font-size:14px;color:#4338ca">📌 现代写法推荐<b>构造器注入</b>（依赖写在构造参数里，可省略 <code>@Autowired</code>）：依赖不可变、好测试。第 2 课骨架里会直接示范。</p>
+  </div>
+
+  <h2>三、本课唯一的「动手」：在脑子里画这条线</h2>
+  <p>关掉本页，拿张纸（或在脑中）默画：<b>浏览器 → Controller → Service → Mapper → DB</b>，并给每层标一句它「负责什么」。能默画出来，本课就过关了。这就是「检索练习」——比重读笔记的记忆牢固得多。</p>
+
+  <h2>四、小测：立刻检索一遍（合上笔记答）</h2>
+  <div class="quiz">
+    <h2>检索练习</h2>
+    <p style="color:var(--muted);font-size:14px;margin-top:0">每题点一个选项，立刻看对错。答错别急，看解析再回想。</p>
+
+    <div class="q" data-ans="0">
+      <div class="stem">1. 一次 GET 请求进入 Spring 后，第一个处理它的组件是？</div>
+      <div class="opts">
+        <button class="opt">控制层</button>
+        <button class="opt">服务层</button>
+        <button class="opt">数据层</button>
+        <button class="opt">数据库</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-ans="2">
+      <div class="stem">2. <code>@Service</code> 注解打在哪一类上？</div>
+      <div class="opts">
+        <button class="opt">实体类</button>
+        <button class="opt">控制类</button>
+        <button class="opt">业务类</button>
+        <button class="opt">配置类</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-ans="1">
+      <div class="stem">3. MyBatis 里，Java 方法调用是怎么变成真正 SQL 的？</div>
+      <div class="opts">
+        <button class="opt">手动new</button>
+        <button class="opt">动态代理</button>
+        <button class="opt">反射创建</button>
+        <button class="opt">静态编译</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+
+    <div class="q" data-ans="0">
+      <div class="stem">4. Spring 帮你创建并注入对象、你不用自己 new，这叫？</div>
+      <div class="opts">
+        <button class="opt">控制反转</button>
+        <button class="opt">面向切面</button>
+        <button class="opt">自动装配</button>
+        <button class="opt">动态代理</button>
+      </div>
+      <div class="feedback"></div>
+    </div>
+  </div>
+
+  <h2>五、想深挖时，回看这些笔记</h2>
+  <div class="sources">
+    📚 你的 ima 一手资料（在《Java后端课程资料》知识库）：
+    <ul>
+      <li><a href="ima://kb/7516478123286370">Spring之IoC与AOP.md</a> —— IoC/DI 底层，本课 Aha 点的来源</li>
+      <li><a href="ima://kb/7516478123286370">SpringMVC.md</a> —— 请求怎么进 Controller</li>
+      <li><a href="ima://kb/7516478123286370">MyBatis.md</a> —— Mapper 与动态代理</li>
+      <li><a href="ima://kb/7516478123286370">teaching-style-analysis.md</a> —— 先看它把握全貌</li>
+    </ul>
+    🔗 外部权威：<a href="https://docs.spring.io/spring-boot/docs/current/reference/html/">Spring Boot 官方文档</a> · <a href="https://mybatis.org/mybatis-3/">MyBatis 官方文档</a>
+  </div>
+
+  <div class="callout good">
+    <b>🤝 我是你的老师。</b>任何一步没懂——比如「动态代理到底怎么回事」「IoC 和 @Autowired 啥关系」——直接追问我，我会用你能接住的方式再讲一遍，必要时补一节小课。别带着疑惑进下一课。
+  </div>
+
+  <footer>
+    下一课预告：<b>第 2 课 · 项目骨架与 IoC/DI</b> —— 在 <code>_01</code> 里真正新建一个 Controller→Service→Mapper，把本课这条线跑通成可运行代码。
+  </footer>
+
+</main>
+
+<script>
+  const explain = [
+    '✓ 正确：请求先到 Controller（门面），再由它调用下层。',
+    '✓ 正确：@Service 标记业务类，业务逻辑写在 Service 层。',
+    '✓ 正确：MyBatis 用动态代理，让你只写接口、不用写实现类，调用方法即执行 SQL。',
+    '✓ 正确：这正是 IoC（控制反转）——对象的创建权交给 Spring 容器。'
+  ];
+  document.querySelectorAll('.q').forEach((q, qi) => {
+    const ans = +q.dataset.ans;
+    const opts = q.querySelectorAll('.opt');
+    const fb = q.querySelector('.feedback');
+    opts.forEach((btn, i) => {
+      btn.addEventListener('click', () => {
+        opts.forEach(o => o.disabled = true);
+        if (i === ans) {
+          btn.classList.add('correct');
+          fb.textContent = explain[qi];
+          fb.classList.add('ok');
+        } else {
+          btn.classList.add('wrong');
+          opts[ans].classList.add('correct');
+          fb.textContent = '✗ 再想想：' + explain[qi].replace('✓ 正确：', '');
+          fb.classList.add('no');
+        }
+      });
+    });
+  });
+</script>
+</body>
+</html>
